@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Patient vitals monitor</title>
+<link rel="icon" href="data:,">
+<script src="https://cdn.jsdelivr.net/npm/mqtt@5.10.1/dist/mqtt.min.js"></script>
+<style>
+:root{
+  --ink:#14213d; --muted:#5b6a85; --paper:#edf1f7; --panel:#ffffff; --line:#d9e0ec; --band:rgba(14,143,131,.10);
+  --ok:#0e8f83; --warn:#b97a0b; --bad:#d23f37; --brand:#1b3a6b; --state:var(--muted);
+  --shadow:0 1px 2px rgba(20,33,61,.06),0 4px 14px rgba(20,33,61,.05);
+  font-family:"Segoe UI",system-ui,-apple-system,Roboto,"Helvetica Neue",Arial,sans-serif;
+}
+@media (prefers-color-scheme:dark){
+  :root{--ink:#e8edf7;--muted:#9aa7c2;--paper:#0e1526;--panel:#162039;--line:#27345a;--band:rgba(40,200,184,.12);
+        --ok:#2cc4b2;--warn:#e0a63a;--bad:#ff6b62;--brand:#8fb4ff;--shadow:none}
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--ink);font-variant-numeric:tabular-nums;-webkit-font-smoothing:antialiased}
+body[data-state="normal"]{--state:var(--ok)}
+body[data-state="measuring"],body[data-state="no_finger"]{--state:var(--warn)}
+body[data-state="alert"],body[data-state="fall"]{--state:var(--bad)}
+.wrap{max-width:1180px;margin:0 auto;padding:18px 20px 28px}
+
+/* top bar */
+.top{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}
+.brand{display:flex;align-items:center;gap:12px}
+.logo{width:38px;height:38px;border-radius:10px;background:var(--brand);display:grid;place-items:center}
+.logo svg{width:22px;height:22px}
+h1{font-size:19px;line-height:1.2;margin:0;font-weight:650}
+.sub{font-size:13px;color:var(--muted)}
+.pills{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.pill{display:flex;align-items:center;gap:7px;background:var(--panel);border:1px solid var(--line);border-radius:999px;padding:5px 12px;font-size:13px;box-shadow:var(--shadow)}
+.dot{width:9px;height:9px;border-radius:50%;background:#98a3b8}
+.dot.on{background:var(--ok);box-shadow:0 0 0 3px rgba(14,143,131,.18)}
+#clock{font-weight:600}
+
+/* status banner */
+.banner{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;background:var(--state);color:#fff;border-radius:10px;padding:13px 18px;margin-bottom:14px;box-shadow:var(--shadow);transition:background .25s}
+.banner strong{font-size:18px;font-weight:650}
+.banner span{font-size:14px;opacity:.95}
+body[data-state="fall"] .banner{animation:flash 1s steps(2) infinite}
+@keyframes flash{50%{filter:brightness(1.22)}}
+@media (prefers-reduced-motion:reduce){body[data-state="fall"] .banner{animation:none}}
+
+/* cards */
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px 16px 14px;box-shadow:var(--shadow)}
+.vitals{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+.head{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.name{font-size:14px;font-weight:600;color:var(--muted)}
+.chip{font-size:12px;font-weight:650;padding:3px 10px;border-radius:999px;background:var(--line);color:var(--muted)}
+.chip.ok{background:rgba(14,143,131,.14);color:var(--ok)}
+.chip.warn{background:rgba(201,138,18,.16);color:var(--warn)}
+.chip.bad{background:rgba(210,63,55,.16);color:var(--bad)}
+.val{display:flex;align-items:baseline;gap:6px;margin:10px 0 4px}
+.val b{font-size:54px;line-height:1;font-weight:700;letter-spacing:-1px}
+.val span{font-size:16px;color:var(--muted)}
+.vital canvas{width:100%;height:64px;display:block}
+.rng{font-size:12px;color:var(--muted);margin-top:6px}
+
+.lower{display:grid;grid-template-columns:2fr 1fr;gap:14px;margin-top:14px}
+.card h2{font-size:14px;font-weight:600;color:var(--muted);margin:0 0 10px}
+.motion{display:grid;grid-template-columns:minmax(180px,1fr) 2fr;gap:18px;align-items:center}
+.act{font-size:30px;font-weight:700}
+.axes{display:grid;grid-template-columns:repeat(3,1fr);gap:4px 12px;margin-top:12px;font-size:13px}
+.axes div{display:flex;justify-content:space-between;border-bottom:1px solid var(--line);padding:3px 0}
+.axes em{font-style:normal;color:var(--muted)}
+.axes .grp{grid-column:1/-1;border:0;color:var(--muted);font-size:12px;padding-top:8px}
+#gMag{width:100%;height:110px;display:block}
+
+.log{list-style:none;margin:0;padding:0;max-height:210px;overflow:auto}
+.log li{display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-bottom:1px solid var(--line);font-size:14px}
+.log li:last-child{border:0}
+.log time{color:var(--muted);font-size:12px;min-width:84px;padding-top:2px;white-space:nowrap}
+.log i{width:9px;height:9px;border-radius:50%;margin-top:6px;flex:none}
+.log .ok i{background:var(--ok)} .log .warn i{background:var(--warn)} .log .bad i{background:var(--bad)}
+.empty{color:var(--muted);font-size:13px;padding:8px 0}
+
+.foot{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;margin-top:14px;font-size:13px;color:var(--muted)}
+button{font:inherit;font-weight:600;background:var(--brand);color:#fff;border:0;border-radius:8px;padding:9px 16px;cursor:pointer;transition:filter .15s}
+@media (prefers-color-scheme:dark){button{color:#0e1526}}
+button:hover{filter:brightness(1.12)}
+button:focus-visible{outline:3px solid #7aa7ff;outline-offset:2px}
+
+@media (max-width:980px){.vitals{grid-template-columns:repeat(2,1fr)}.lower{grid-template-columns:1fr}}
+@media (max-width:560px){.vitals{grid-template-columns:1fr}.motion{grid-template-columns:1fr}.val b{font-size:46px}}
+@media print{.pill,button{display:none}body{background:#fff}}
+.sel{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted)}
+select{font:inherit;font-weight:600;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:7px 10px;min-width:190px;box-shadow:var(--shadow)}
+select:focus-visible{outline:3px solid #7aa7ff;outline-offset:2px}
+.hd{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}.hd h2{margin:0}
+.ghost{background:transparent;color:var(--ink);border:1px solid var(--line);padding:6px 12px;font-size:13px}
+.btns{display:flex;gap:8px;flex-wrap:wrap}
+body[data-state="offline"] .vitals,body[data-state="offline"] .motion{opacity:.45}
+.who{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:14px;padding:12px 18px}
+.who b{display:block;font-size:22px;font-weight:650}
+.who span{font-size:13px;color:var(--muted)}
+.ghost:disabled{opacity:.45;cursor:default}
+dialog{border:1px solid var(--line);border-radius:12px;background:var(--panel);color:var(--ink);padding:22px;width:min(420px,92vw);box-shadow:0 12px 40px rgba(0,0,0,.25)}
+dialog::backdrop{background:rgba(10,18,36,.55)}
+dialog h3{margin:0 0 14px;font-size:18px}
+dialog label{display:block;font-size:13px;font-weight:600;color:var(--muted);margin-bottom:12px}
+dialog input{display:block;width:100%;margin-top:5px;font:inherit;font-size:15px;color:var(--ink);background:var(--paper);border:1px solid var(--line);border-radius:8px;padding:9px 11px}
+dialog input:focus-visible{outline:3px solid #7aa7ff;outline-offset:1px}
+.hint{font-size:12px;color:var(--muted);margin:0 0 8px}
+.err{font-size:13px;color:var(--bad);min-height:18px;margin:0 0 8px}
+dialog .btns{justify-content:flex-end}
+</style>
+</head>
+<body data-state="offline">
+<div class="wrap">
+  <header class="top">
+    <div class="brand">
+      <div class="logo" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l2-5 4 10 2-5h6"/></svg></div>
+      <div>
+        <h1>Patient vitals monitor</h1>
+        <div class="sub">Continuous monitoring from the wearable sensor node</div>
+      </div>
+    </div>
+    <div class="pills">
+      <label class="sel"><span>Patient</span><select id="devSel" aria-label="Select patient"></select></label>
+      <button class="ghost" id="add">Add patient</button>
+      <button class="ghost" id="hist">Server history</button>
+      <div class="pill"><i class="dot" id="dSrv"></i><span id="tSrv">Server offline</span></div>
+      <div class="pill"><i class="dot" id="dDev"></i><span id="tDev">Device offline</span></div>
+      <div class="pill" id="clock">--:--:--</div>
+    </div>
+  </header>
+
+  <div class="who card"><div><b id="pName">No patient added</b><span id="pChan"></span></div><button class="ghost" id="rm">Remove patient</button></div>
+
+  <div class="banner" role="status" aria-live="polite"><strong id="bTitle">Waiting for device</strong><span id="bHint">Connecting to the monitor…</span></div>
+
+  <section class="vitals" id="vitals" aria-label="Vital signs"></section>
+
+  <div class="lower">
+    <section class="card">
+      <h2>Movement and posture</h2>
+      <div class="motion">
+        <div>
+          <div class="act" id="act">--</div>
+          <div class="axes">
+            <div class="grp">Acceleration (g)</div>
+            <div><em>X</em><span id="ax">0.00</span></div><div><em>Y</em><span id="ay">0.00</span></div><div><em>Z</em><span id="az">0.00</span></div>
+            <div class="grp">Rotation (°/s)</div>
+            <div><em>X</em><span id="gx">0.0</span></div><div><em>Y</em><span id="gy">0.0</span></div><div><em>Z</em><span id="gz">0.0</span></div>
+          </div>
+        </div>
+        <canvas id="gMag" aria-label="Movement intensity, last 10 seconds"></canvas>
+      </div>
+    </section>
+    <section class="card">
+      <div class="hd"><h2>Events</h2><button class="ghost" id="clr">Clear log</button></div>
+      <ul class="log" id="log"><li class="empty">No events yet. Changes in patient status will appear here.</li></ul>
+    </section>
+  </div>
+
+  <div class="foot">
+    <span>Last reading: <strong id="last">--</strong> &nbsp;·&nbsp; Saved log: <strong id="logN">0</strong> entries</span>
+    <div class="btns"><button class="ghost" id="dl">Download log (CSV)</button><button id="recal">Recalibrate sensors</button></div>
+  </div>
+</div>
+
+<dialog id="dlg" aria-labelledby="dTitle">
+  <form id="pf">
+    <h3 id="dTitle">Add patient</h3>
+    <label>Patient name<input id="fName" maxlength="40" autocomplete="off" required></label>
+    <label>MQTT channel<input id="fChan" maxlength="120" autocomplete="off" placeholder="mdm-g3-pcce/health" required></label>
+    <p class="hint">The channel (topic root) this patient’s monitor publishes to. Vitals, motion and events are read from it.</p>
+    <p class="err" id="fErr" role="alert"></p>
+    <div class="btns"><button type="button" class="ghost" id="fCancel">Cancel</button><button type="submit">Add patient</button></div>
+  </form>
+</dialog>
+
+<script>
+const BROKER = new URLSearchParams(location.search).get("broker");
+const URLS = BROKER ? [BROKER] : ["wss://broker.hivemq.com:8884/mqtt", "ws://broker.hivemq.com:8000/mqtt"];
+const $ = id => document.getElementById(id);
+const LIM = 120, MAGLIM = 100, LOGMAX = 20000;
+const STORE = "vitals.log.v2", SELKEY = "vitals.patient", PKEY = "vitals.patients.v1";
+
+const VITALS = [
+  {k:"hr",   name:"Heart rate",    unit:"bpm", d:0, min:40, max:160, band:[60,100],   range:"Normal 60–100 bpm",
+   cls:v => v<50||v>120 ? ["Critical","bad"] : v<60 ? ["Low","warn"] : v>100 ? ["High","warn"] : ["Normal","ok"]},
+  {k:"spo2", name:"Oxygen (SpO₂)", unit:"%",   d:0, min:85, max:100, band:[95,100],   range:"Normal 95–100 %",
+   cls:v => v<92 ? ["Critical","bad"] : v<95 ? ["Low","warn"] : ["Normal","ok"]},
+  {k:"hrv",  name:"HRV (RMSSD)",   unit:"ms",  d:0, min:0,  max:120, band:[20,100],   range:"Typical 20–100 ms",
+   cls:v => v<20 ? ["Low","warn"] : v>100 ? ["High","warn"] : ["Normal","ok"]},
+  {k:"temp", name:"Temperature",   unit:"°C",  d:1, min:36, max:40,  band:[36.1,37.2],range:"Normal 36.1–37.2 °C",
+   cls:v => v<36.1 ? ["Low","warn"] : v<=37.2 ? ["Normal","ok"] : v<=38 ? ["Elevated","warn"] : ["Fever","bad"]}
+];
+const STATES = {
+  normal:   ["Vitals within normal range", "Heart rate and oxygen level are stable.", "ok"],
+  measuring:["Acquiring signal", "Keep the finger still on the sensor.", "warn"],
+  no_finger:["Sensor not in contact", "Place a finger on the pulse oximeter.", "warn"],
+  alert:    ["Abnormal vitals", "Heart rate or oxygen level is outside safe limits.", "bad"],
+  fall:     ["Possible fall detected", "Check on the patient now.", "bad"],
+  offline:  ["No signal from device", "Waiting for the monitor to reconnect.", "warn"]
+};
+const ACT = {rest:"At rest", walk:"Walking", run:"Running", fall:"Fall detected"};
+const fmt = (v,d=0) => (v==null || isNaN(v)) ? "--" : Number(v).toFixed(d);
+const store = {
+  get(k){ try { return localStorage.getItem(k); } catch { return null; } },
+  set(k,v){ try { localStorage.setItem(k,v); } catch {} }
+};
+
+$("vitals").innerHTML = VITALS.map(m => `
+  <section class="card vital" aria-label="${m.name}">
+    <div class="head"><span class="name">${m.name}</span><span class="chip" id="c-${m.k}">--</span></div>
+    <div class="val"><b id="n-${m.k}">--</b><span>${m.unit}</span></div>
+    <canvas id="g-${m.k}"></canvas>
+    <div class="rng">${m.range}</div>
+  </section>`).join("");
+
+// ---------- saved log: [time, device, hr, spo2, hrv, temp, activity, status, event] ----------
+let log = [];
+try { log = JSON.parse(store.get(STORE) || "[]"); if (!Array.isArray(log)) log = []; } catch { log = []; }
+let logDirty = false, eventsDirty = true;
+function saveLog(){ if (logDirty) { store.set(STORE, JSON.stringify(log)); logDirty = false; } }
+function addRow(d, evt){
+  const L = d.last;
+  log.push([Date.now(), d.name, d.channel, L.hr ?? null, L.spo2 ?? null, L.hrv ?? null, L.temp ?? null, d.m.act || "", d.state, evt || ""]);
+  if (log.length > LOGMAX) log.splice(0, log.length - LOGMAX);
+  logDirty = true; if (evt) eventsDirty = true;
+}
+
+// ---------- patients (each patient = name + MQTT channel) ----------
+const devs = {}, opts = {};
+let patients = [];
+try { patients = JSON.parse(store.get(PKEY) || "[]"); if (!Array.isArray(patients)) patients = []; } catch { patients = []; }
+patients = patients.filter(p => p && p.name && p.channel);
+let sel = store.get(SELKEY);
+function makeDev(p){
+  devs[p.channel] = {id:p.channel, name:p.name, channel:p.channel, buf:{hr:[],spo2:[],hrv:[],temp:[],mag:[]}, last:{}, m:{}, state:"offline",
+                     lastVitals:0, lastMotion:0, lastRow:0, lastAt:null, realTemp:false, t:{v:37.6, target:37.6, change:0, next:0}};
+}
+function refreshSelect(){
+  const el = $("devSel"); el.innerHTML = "";
+  if (!patients.length) { el.innerHTML = '<option disabled selected>No patients added</option>'; return; }
+  patients.forEach(p => { const o = document.createElement("option"); o.value = p.channel; o.textContent = p.name; el.appendChild(o); opts[p.channel] = o; });
+  el.value = sel;
+}
+function savePatients(){ store.set(PKEY, JSON.stringify(patients)); store.set(SELKEY, sel || ""); }
+function addPatient(name, channel){
+  patients.push({name, channel}); makeDev({name, channel}); sel = channel; savePatients(); refreshSelect(); eventsDirty = true;
+  if (client && client.connected) client.subscribe(channel + "/#");
+}
+function removePatient(channel){
+  patients = patients.filter(p => p.channel !== channel); delete devs[channel]; delete opts[channel];
+  if (client) client.unsubscribe(channel + "/#");
+  sel = patients[0] ? patients[0].channel : null; savePatients(); refreshSelect(); eventsDirty = true;
+}
+patients.forEach(makeDev);
+if (!devs[sel]) sel = patients[0] ? patients[0].channel : null;
+refreshSelect();
+$("devSel").onchange = e => { sel = e.target.value; savePatients(); eventsDirty = true; paint(); };
+
+const isAlive = (d, now) => now - Math.max(d.lastVitals, d.lastMotion) < 4000;
+function setState(d, s, silent){
+  if (!STATES[s] || s === d.state) return;
+  d.state = s;
+  if (!silent && s !== "measuring") addRow(d, STATES[s][0]);
+}
+const pushBuf = (a, v, n) => { a.push(v); if (a.length > n) a.shift(); };
+function setVal(d, k, v){ d.last[k] = v; pushBuf(d.buf[k], v, LIM); }
+
+// ---------- body temperature (smoothed, 37–39 °C) ----------
+function tempTick(d, now){
+  if (d.realTemp) return;
+  const t = d.t;
+  if (now > t.change) { t.target = 37 + Math.random() * 2; t.change = now + 12000; }
+  if (now < t.next) return;
+  t.next = now + 2000;
+  t.v += (t.target - t.v) * 0.15 + (Math.random() - .5) * 0.04;
+  t.v = Math.min(39, Math.max(37, t.v));
+  setVal(d, "temp", Math.round(t.v * 10) / 10);
+}
+
+// ---------- drawing ----------
+function draw(cv, data, min, max, color, band, n){
+  const cs = getComputedStyle(document.documentElement);
+  const dpr = window.devicePixelRatio || 1, w = cv.clientWidth, h = cv.clientHeight;
+  if (cv.width !== Math.round(w*dpr)) { cv.width = Math.round(w*dpr); cv.height = Math.round(h*dpr); }
+  const c = cv.getContext("2d"); c.setTransform(dpr,0,0,dpr,0,0); c.clearRect(0,0,w,h);
+  const y = v => h - 3 - (Math.min(max,Math.max(min,v)) - min) / (max-min) * (h-6);
+  if (band) { c.fillStyle = cs.getPropertyValue("--band"); c.fillRect(0, y(band[1]), w, y(band[0]) - y(band[1])); }
+  c.strokeStyle = cs.getPropertyValue("--line"); c.lineWidth = 1;
+  [0,.5,1].forEach(f => { const gy = Math.round(3 + f*(h-6)) + .5; c.beginPath(); c.moveTo(0,gy); c.lineTo(w,gy); c.stroke(); });
+  if (data.length < 2) return;
+  const off = n - data.length, x = i => w * (i + off) / (n - 1);
+  c.beginPath(); let on = false;
+  data.forEach((v,i) => { if (v == null) { on = false; return; } on ? c.lineTo(x(i), y(v)) : c.moveTo(x(i), y(v)); on = true; });
+  c.strokeStyle = color; c.lineWidth = 2; c.lineJoin = "round"; c.stroke();
+  const last = data[data.length-1];
+  if (last != null) { c.fillStyle = color; c.beginPath(); c.arc(w-2, y(last), 3.5, 0, 7); c.fill(); }
+}
+
+function renderEvents(){
+  eventsDirty = false;
+  const ul = $("log"); ul.innerHTML = "";
+  const rows = [];
+  for (let i = log.length - 1; i >= 0 && rows.length < 30; i--) if (log[i][2] === sel && log[i][9]) rows.push(log[i]);
+  if (!rows.length) { ul.innerHTML = '<li class="empty">No events yet. Changes in patient status will appear here.</li>'; return; }
+  const today = new Date().toDateString();
+  rows.forEach(r => {
+    const dt = new Date(r[0]), tm = dt.toLocaleTimeString([], {hour12:false});
+    const li = document.createElement("li"); li.className = (STATES[r[8]] || [])[2] || "warn";
+    const t = document.createElement("time"); t.textContent = dt.toDateString() === today ? tm : dt.toLocaleDateString([], {day:"numeric", month:"short"}) + " " + tm;
+    const i = document.createElement("i"), s = document.createElement("span"); s.textContent = r[9];
+    li.append(t, i, s); ul.appendChild(li);
+  });
+}
+
+function paint(){
+  const d = devs[sel];
+  const st = d ? d.state : "offline";
+  document.body.dataset.state = st;
+  const S = d ? STATES[st] : ["No patient selected", "Add a patient and enter the MQTT channel their monitor publishes to.", "warn"];
+  $("bTitle").textContent = S[0]; $("bHint").textContent = S[1];
+  $("logN").textContent = log.length;
+  $("pName").textContent = d ? d.name : "No patient added";
+  $("pChan").textContent = d ? "MQTT channel: " + d.channel : "Use Add patient to start monitoring.";
+  $("rm").disabled = !d;
+  if (eventsDirty) renderEvents();
+  const state = getComputedStyle(document.body).getPropertyValue("--state").trim();
+  const ink = getComputedStyle(document.documentElement).getPropertyValue("--ink").trim();
+  VITALS.forEach(m => {
+    const v = d ? d.last[m.k] : null;
+    $("n-"+m.k).textContent = fmt(v, m.d);
+    const chip = $("c-"+m.k);
+    if (v == null) { chip.textContent = "--"; chip.className = "chip"; }
+    else { const [t,c] = m.cls(v); chip.textContent = t; chip.className = "chip " + c; }
+    draw($("g-"+m.k), d ? d.buf[m.k] : [], m.min, m.max, m.k === "hr" ? state : ink, m.band, LIM);
+  });
+  const mo = d ? d.m : {};
+  ["ax","ay","az"].forEach(k => $(k).textContent = fmt(mo[k], 2));
+  ["gx","gy","gz"].forEach(k => $(k).textContent = fmt(mo[k], 1));
+  $("act").textContent = ACT[mo.act] || "--";
+  $("last").textContent = d && d.lastAt ? new Date(d.lastAt).toLocaleTimeString([], {hour12:false}) : "--";
+  draw($("gMag"), d ? d.buf.mag : [], 0, 3, ink, null, MAGLIM);
+}
+
+// ---------- MQTT ----------
+let client, urlIdx = 0, failTimer;
+function startClient(){
+  if (typeof mqtt === "undefined") { $("tSrv").textContent = "Connection library not loaded"; return; }
+  client = mqtt.connect(URLS[urlIdx], {clientId:"dash-"+Math.random().toString(16).slice(2,8), reconnectPeriod:2000, connectTimeout:6000});
+  client.on("connect", () => { clearTimeout(failTimer); $("dSrv").classList.add("on"); $("tSrv").textContent = "Server connected"; patients.forEach(p => client.subscribe(p.channel + "/#")); });
+  client.on("close",   () => { $("dSrv").classList.remove("on"); $("tSrv").textContent = "Server offline"; });
+  client.on("error",   e => { $("tSrv").textContent = "Server error: " + (e.message || e); });
+  client.on("message", onMessage);
+  failTimer = setTimeout(() => { if (!client.connected) { client.end(true); urlIdx = (urlIdx+1) % URLS.length; startClient(); } }, 7000);
+}
+function onMessage(topic, payload){
+  let best = null;                                   // longest matching patient channel wins
+  for (const p of patients) if (topic.startsWith(p.channel + "/") && (!best || p.channel.length > best.length)) best = p.channel;
+  const d = best && devs[best]; if (!d) return;
+  const key = topic.slice(best.length + 1), txt = payload.toString();
+  if (!["vitals","motion","event","status","anomaly"].includes(key)) return;
+  if (key === "status") { if (txt === "offline") { d.lastVitals = d.lastMotion = 0; setState(d, "offline"); } return; }
+  let j; try { j = JSON.parse(txt); } catch { return; }
+  if (key === "vitals") {
+    d.lastVitals = d.lastAt = Date.now();
+    setVal(d, "hr", j.hr); setVal(d, "spo2", j.spo2); setVal(d, "hrv", j.hrv);
+    if (j.temp != null) { d.realTemp = true; setVal(d, "temp", j.temp); }
+    if (j.state) setState(d, j.state);
+  } else if (key === "motion") {
+    d.lastMotion = Date.now();
+    d.m = {ax:j.ax, ay:j.ay, az:j.az, gx:j.gx, gy:j.gy, gz:j.gz, act:j.act};
+    pushBuf(d.buf.mag, Math.hypot(j.ax, j.ay, j.az), MAGLIM);
+    if (j.act === "fall") setState(d, "fall");
+  } else if (key === "event" && j.type === "fall") setState(d, "fall");
+  else if (key === "anomaly" && j.level === "alert") setState(d, "alert");
+}
+
+// ---------- buttons ----------
+const flash = (b, txt, back) => { b.textContent = txt; setTimeout(() => b.textContent = back, 2000); };
+$("recal").onclick = () => {
+  if (!client || !sel) return;
+  client.publish(sel + "/cmd", "recalibrate");
+  flash($("recal"), "Recalibration sent", "Recalibrate sensors");
+};
+$("dl").onclick = () => {
+  if (!log.length) return flash($("dl"), "Nothing to save yet", "Download log (CSV)");
+  const head = ["time","patient","mqtt_channel","heart_rate_bpm","spo2_percent","hrv_ms","temperature_c","activity","status","event"];
+  const esc = v => { v = v == null ? "" : String(v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
+  const lines = [head.join(",")].concat(log.map(r => [new Date(r[0]).toISOString(), ...r.slice(1)].map(esc).join(",")));
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob(["\ufeff" + lines.join("\r\n")], {type:"text/csv;charset=utf-8"}));
+  a.download = "vitals-log-" + new Date().toISOString().slice(0,19).replace(/[:T]/g, "-") + ".csv";
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+};
+$("hist").onclick = () => { location.href = "/history"; };
+$("add").onclick = () => { $("pf").reset(); $("fErr").textContent = ""; $("dlg").showModal(); $("fName").focus(); };
+$("fCancel").onclick = () => $("dlg").close();
+$("pf").onsubmit = e => {
+  e.preventDefault();
+  const name = $("fName").value.trim(), ch = $("fChan").value.trim().replace(/^\/+|\/+$/g, ""), err = m => { $("fErr").textContent = m; };
+  if (!name) return err("Enter the patient’s name.");
+  if (!ch) return err("Enter the MQTT channel.");
+  if (/[+#\s]/.test(ch)) return err("The channel can’t contain spaces, + or #.");
+  if (patients.some(p => p.channel === ch)) return err("That channel is already assigned to a patient.");
+  addPatient(name, ch); $("dlg").close();
+};
+$("rm").onclick = () => {
+  const d = devs[sel]; if (!d) return;
+  if (confirm("Remove " + d.name + " from the dashboard? Saved log entries are kept.")) removePatient(sel);
+};
+$("clr").onclick = () => {
+  if (!confirm("Clear the saved log for all patients?")) return;
+  log = []; store.set(STORE, "[]"); logDirty = false; eventsDirty = true;
+};
+
+// ---------- housekeeping ----------
+setInterval(() => {
+  const now = Date.now();
+  $("clock").textContent = new Date().toLocaleTimeString([], {hour12:false});
+  for (const d of Object.values(devs)) {
+    const alive = isAlive(d, now);
+    if (alive) {
+      tempTick(d, now);
+      if (now - d.lastRow >= 5000) { d.lastRow = now; addRow(d, ""); }   // reading saved every 5 s
+    } else if (d.lastVitals || d.lastMotion) setState(d, "offline");
+    const txt = d.name + " — " + (!alive ? "offline" : (d.state === "alert" || d.state === "fall") ? "needs attention" : "online");
+    if (opts[d.id] && opts[d.id].textContent !== txt) opts[d.id].textContent = txt;
+  }
+  const cur = devs[sel], on = cur && isAlive(cur, now);
+  $("dDev").classList.toggle("on", !!on);
+  $("tDev").textContent = on ? "Device online" : "Device offline";
+}, 500);
+setInterval(saveLog, 10000);
+addEventListener("pagehide", saveLog);
+setInterval(paint, 200);
+
+startClient();
+</script>
+</body>
+</html>

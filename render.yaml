@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: mdm-g3-health
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: MQTT_HOST
+        value: broker.hivemq.com
+      - key: MQTT_PORT
+        value: "1883"
+      - key: MQTT_ROOT
+        value: mdm-g3-pcce/health
+      - key: DEFAULT_DEVICE_ID
+        value: esp32
+      - key: DB_PATH
+        value: /tmp/health.db

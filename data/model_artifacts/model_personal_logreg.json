@@ -1,0 +1,48 @@
+{
+  "model_type": "personal_logreg",
+  "features": [
+    "hr_mean",
+    "hr_std",
+    "hr_min",
+    "hr_max",
+    "hr_slope",
+    "spo2_mean",
+    "spo2_std",
+    "spo2_min",
+    "temp_mean",
+    "temp_std",
+    "temp_slope",
+    "acc_mean",
+    "acc_std",
+    "acc_max",
+    "acc_energy"
+  ],
+  "window_seconds": 30,
+  "step_seconds": 15,
+  "calibration_seconds": 120,
+  "normalization": {
+    "method": "median_mad",
+    "mad_scale": 1.4826,
+    "min_scale": 1e-06
+  },
+  "coefficients": [
+    0.10626235924062394,
+    0.0222762706441558,
+    0.12609584265499055,
+    0.004293528820282615,
+    0.09698308438510779,
+    0.0052696490176076605,
+    0.0014837021126346823,
+    0.07015475319090855,
+    0.3680513664240828,
+    -0.004238164636716754,
+    -0.09458887455664466,
+    -0.12105671018193075,
+    0.0035493745329158092,
+    0.004249066606838791,
+    0.09682841738471756
+  ],
+  "intercept": -3.41732750159156,
+  "decision_threshold": 0.5,
+  "note": "Server must compute center/scale from the first 120 s of normal feature windows per device, then z-score before scoring."
+}

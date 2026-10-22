@@ -1,0 +1,9 @@
+.venv
+__pycache__
+*.pyc
+data/*
+!data/model_artifacts
+!data/model_artifacts/**
+.git
+.playwright-mcp
+*.ino

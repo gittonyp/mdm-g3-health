@@ -1,0 +1,33 @@
+{
+  "features": [
+    "hr_mean",
+    "hr_std",
+    "hr_min",
+    "hr_max",
+    "hr_slope",
+    "spo2_mean",
+    "spo2_std",
+    "spo2_min",
+    "temp_mean",
+    "temp_std",
+    "temp_slope",
+    "acc_mean",
+    "acc_std",
+    "acc_max",
+    "acc_energy"
+  ],
+  "window_seconds": 30,
+  "step_seconds": 15,
+  "sampling": {
+    "acc_temp_hz": 8.0,
+    "spo2_hr_hz": 1.0
+  },
+  "labels": {
+    "0": "normal",
+    "1": "stress"
+  },
+  "excluded_signals": [
+    "EDA"
+  ],
+  "calibration_seconds": 120
+}
