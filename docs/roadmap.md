@@ -28,9 +28,11 @@ Snapshot: 2026-10-22. This page separates what is working, what is partial, and 
 
 ## Remaining work
 
-### 1. Firmware temperature (high)
+### 1. Firmware temperature (high) - implemented, awaiting hardware validation
 
-Add real temperature to the pipeline.
+`health_node.ino` now reads the LM35 and publishes `temp` (see `hardware.md`). It is compile-tested; the acceptance criteria below still need a run on the real board.
+
+Original scope:
 
 Scope:
 

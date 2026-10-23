@@ -2,7 +2,7 @@
 
 This document describes the ESP32 node, its wiring, the firmware configuration, and the planned LM35 temperature addition. The firmware file is `health_node.ino`.
 
-Current state: the firmware reads heart rate, SpO2, HRV, and motion; it detects falls and raises local alerts. It does **not** read temperature and does **not** run a model.
+Current state: the firmware reads heart rate, SpO2, HRV, motion, and LM35 temperature; it detects falls and raises local alerts. It does **not** run a model. The sketch is compile-tested but has not yet been run on the board.
 
 ## Bill of materials
 
@@ -16,7 +16,7 @@ Current state: the firmware reads heart rate, SpO2, HRV, and motion; it detects 
 | Green LED | Normal status | GPIO `D14` |
 | Red LED | Alert status | GPIO `D26` |
 | Push button | Local recalibration | GPIO `D25` to GND |
-| LM35 (planned) | Analog temperature | GPIO `D33` (ADC1) |
+| LM35 | Analog temperature | GPIO `D33` (ADC1) |
 | 0.1 uF capacitor (LM35) | Supply decoupling | Across LM35 VIN/GND |
 
 ## Wiring
@@ -45,9 +45,9 @@ Other connections:
 | SpO2 potentiometer | `D35` | Only used when `SIM_MODE 1` |
 | HRV potentiometer | `D32` | Only used when `SIM_MODE 1` |
 
-### LM35 plan (not yet implemented)
+### LM35 (implemented in `health_node.ino`)
 
-- Supply the LM35 from 3.3 V and ground.
+- Supply the LM35 from 5 V (`VIN`) and ground. Its output stays well under 1 V, so it is safe for the ESP32 ADC, and the LM35 is only specified from 4 V.
 - Connect `Vout` to `D33` (GPIO33, ADC1 channel 5).
 - Add a 0.1 uF capacitor between VIN and GND close to the sensor.
 - Use ADC1: ADC2 pins conflict with WiFi on the ESP32.
@@ -58,9 +58,11 @@ voltage_mv = raw * 3300 / 4095
 temp_c     = voltage_mv / 10.0
 ```
 
-The ESP32 ADC is not perfectly linear; calibrate the offset/scale against a reference thermometer if accuracy matters. For the dashboard and ML pipeline, a stable value in the 36-38 C range is sufficient.
+The firmware reads the pin with `analogReadMilliVolts` (factory-calibrated) at 0 dB attenuation, averages 16 reads, low-pass filters, and then adds `TEMP_OFFSET_C` (default 3.0) because fingertip skin reads about 2-4 C below body temperature. The published `temp` is therefore an estimate. Tape the LM35 next to the MAX30102 so the same finger touches both.
 
-The dashboard already accepts an incoming `temp` field and stops simulating when it arrives. The server already stores and scores temperature.
+The value is sent only when a finger has been on the sensor for 30 s (`TEMP_SETTLE_MS`) and the reading is between 25 and 42 C; otherwise `temp` is `null`. The ESP32 ADC is not perfectly linear, so tune `TEMP_OFFSET_C` against a reference thermometer if accuracy matters.
+
+The dashboard stops simulating temperature when `temp` arrives, and the server stores and scores it.
 
 ## Firmware configuration
 
@@ -94,7 +96,7 @@ WiFi credentials are intentionally kept in the sketch for this demo. Do not trea
 
 | Topic | Rate | Payload |
 |---|---|---|
-| `{root}/vitals` | 2 Hz | `{"t","hr","spo2","hrv","finger","state"}` |
+| `{root}/vitals` | 2 Hz | `{"t","hr","spo2","hrv","temp","finger","state"}` (`temp` may be `null`) |
 | `{root}/motion` | 10 Hz | `{"t","ax","ay","az","gx","gy","gz","act"}` |
 | `{root}/event` | on fall | `{"type":"fall"}` |
 | `{root}/status` | on change / last will | `online` or `offline`, retained |
@@ -132,7 +134,7 @@ For Wokwi, use `SIM_MODE 1`; the potentiometers at `D34`, `D35`, and `D32` simul
 
 ## Known gaps
 
-- No temperature reading; `temp` is absent from the vitals payload.
+- Temperature is an offset-corrected skin estimate, not a clinical measurement.
 - No on-device feature extraction, calibration, or inference.
 - No device authentication; any client can publish to the topic root.
 - No OTA update path.

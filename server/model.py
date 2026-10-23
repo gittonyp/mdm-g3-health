@@ -20,6 +20,7 @@ FEATURES = [
     "acc_max",
     "acc_energy",
 ]
+SIGNAL_OF = {name: name.split("_", 1)[0] for name in FEATURES}
 MIN_SAMPLES = 5
 MIN_CALIBRATION_ROWS = 4
 
@@ -48,7 +49,10 @@ def _stats(values):
     }
 
 
-def compute_features(vitals, motion, end_ts, window_seconds=30.0):
+def compute_features(vitals, motion, end_ts, window_seconds=30.0, features=None):
+    """Compute window features; only the signals needed by `features` must have data."""
+    wanted = list(features) if features is not None else FEATURES
+    needed = {SIGNAL_OF[name] for name in wanted}
     start_ts = end_ts - window_seconds
     vital_rows = [row for row in vitals if start_ts <= row[0] <= end_ts]
     motion_rows = [row for row in motion if start_ts <= row[0] <= end_ts]
@@ -62,43 +66,59 @@ def compute_features(vitals, motion, end_ts, window_seconds=30.0):
         if _finite(row[1]) and _finite(row[2]) and _finite(row[3])
     ]
 
-    if len(hr) < MIN_SAMPLES or len(spo2) < MIN_SAMPLES or len(temp) < MIN_SAMPLES or len(acc) < MIN_SAMPLES:
-        return None
+    series = {"hr": hr, "spo2": spo2, "temp": temp, "acc": acc}
+    for signal in needed:
+        if len(series[signal]) < MIN_SAMPLES:
+            return None
 
     hr_values = [value for _, value in hr]
     spo2_values = [value for _, value in spo2]
     temp_values = [value for _, value in temp]
     acc_values = [value for _, value in acc]
 
-    hr_stats = _stats(hr_values)
-    spo2_stats = _stats(spo2_values)
-    temp_stats = _stats(temp_values)
-    acc_stats = _stats(acc_values)
+    def stats_of(values):
+        return _stats(values) if len(values) >= MIN_SAMPLES else None
 
-    return {
-        "hr_mean": hr_stats["mean"],
-        "hr_std": hr_stats["std"],
-        "hr_min": hr_stats["min"],
-        "hr_max": hr_stats["max"],
-        "hr_slope": _slope([t for t, _ in hr], hr_values),
-        "spo2_mean": spo2_stats["mean"],
-        "spo2_std": spo2_stats["std"],
-        "spo2_min": spo2_stats["min"],
-        "temp_mean": temp_stats["mean"],
-        "temp_std": temp_stats["std"],
-        "temp_slope": _slope([t for t, _ in temp], temp_values),
-        "acc_mean": acc_stats["mean"],
-        "acc_std": acc_stats["std"],
-        "acc_max": acc_stats["max"],
-        "acc_energy": sum(value ** 2 for value in acc_values) / len(acc_values),
+    hr_stats = stats_of(hr_values)
+    spo2_stats = stats_of(spo2_values)
+    temp_stats = stats_of(temp_values)
+    acc_stats = stats_of(acc_values)
+
+    builders = {
+        "hr_mean": lambda: hr_stats["mean"],
+        "hr_std": lambda: hr_stats["std"],
+        "hr_min": lambda: hr_stats["min"],
+        "hr_max": lambda: hr_stats["max"],
+        "hr_slope": lambda: _slope([t for t, _ in hr], hr_values),
+        "spo2_mean": lambda: spo2_stats["mean"],
+        "spo2_std": lambda: spo2_stats["std"],
+        "spo2_min": lambda: spo2_stats["min"],
+        "temp_mean": lambda: temp_stats["mean"],
+        "temp_std": lambda: temp_stats["std"],
+        "temp_slope": lambda: _slope([t for t, _ in temp], temp_values),
+        "acc_mean": lambda: acc_stats["mean"],
+        "acc_std": lambda: acc_stats["std"],
+        "acc_max": lambda: acc_stats["max"],
+        "acc_energy": lambda: sum(value ** 2 for value in acc_values) / len(acc_values),
     }
+    return {name: builders[name]() for name in wanted}
 
 
 class PersonalizedModel:
     def __init__(self, artifact):
-        if artifact.get("features") != FEATURES:
-            raise ValueError("model artifact feature order does not match server features")
-        self.features = list(artifact["features"])
+        features = artifact.get("features")
+        # Retrained models may use any non-empty subset of the known features (for example
+        # without the temperature features); the artifact's own order is authoritative.
+        if (
+            not isinstance(features, list)
+            or not features
+            or len(set(features)) != len(features)
+            or any(name not in SIGNAL_OF for name in features)
+        ):
+            raise ValueError("model artifact uses unknown, duplicate, or no features")
+        if len(artifact.get("coefficients", [])) != len(features):
+            raise ValueError("model artifact coefficients do not match its features")
+        self.features = list(features)
         self.window_seconds = float(artifact.get("window_seconds", 30))
         self.step_seconds = float(artifact.get("step_seconds", 15))
         self.calibration_seconds = float(artifact.get("calibration_seconds", 120))
@@ -214,7 +234,9 @@ class DeviceBuffer:
         if self.last_window_ts is not None and now - self.last_window_ts < self.step_seconds:
             return None
 
-        features = compute_features(self.vitals, self.motion, now, self.window_seconds)
+        features = compute_features(
+            self.vitals, self.motion, now, self.window_seconds, self.model.features
+        )
         if features is None:
             if not self.model.ready and not self.calibration_rows:
                 # No usable data yet (e.g. firmware without temperature): restart the

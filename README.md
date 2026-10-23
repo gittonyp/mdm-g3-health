@@ -145,20 +145,19 @@ Parts, wiring, and the full pin table are in [`docs/hardware.md`](docs/hardware.
 | Part | Pin(s) |
 |---|---|
 | MAX30102, MPU6050, SSD1306 OLED (I2C) | SDA `D21`, SCL `D22`, 3.3 V, GND |
+| LM35 temperature sensor | VCC to `VIN` (5 V), GND, Vout to `D33`, 0.1 uF capacitor across VCC/GND. Tape it next to the MAX30102 so one finger touches both |
 | Buzzer | `D27` |
 | Green LED | `D14` |
 | Red LED | `D26` |
 | Recalibrate button | `D25` to GND |
 
-Flash steps:
+Flash steps (the sketch is already fully configured, including WiFi and the LM35):
 
-1. In the Arduino IDE, install the **ESP32** board package.
-2. Install the libraries `PubSubClient`, `Adafruit SSD1306`, `Adafruit GFX Library`, and `SparkFun MAX3010x Pulse and Proximity Sensor Library`.
-3. Open `health_node.ino`.
-4. Edit `WIFI_SSID` and `WIFI_PASS` near the top. The ESP32 supports **2.4 GHz WiFi only**.
-5. Keep `SIM_MODE 0` for real hardware. Use `1` only for the Wokwi simulator.
-6. Select your ESP32 board and serial port, then upload.
-7. Open the serial monitor at 115200 baud to check the WiFi and MQTT status.
+1. In the Arduino IDE, install the **ESP32** board package and the libraries `PubSubClient`, `Adafruit SSD1306`, `Adafruit GFX Library`, and `SparkFun MAX3010x Pulse and Proximity Sensor Library`.
+2. Open `health_node.ino`, choose the board **ESP32 Dev Module** and your serial port, and press **Upload**.
+3. Open the serial monitor at 115200 baud. A status line prints every 5 seconds.
+
+The sketch was compile-tested for ESP32 core 3.3.12 with these libraries. If your WiFi isn't `pratik098`, edit `WIFI_SSID` / `WIFI_PASS` (2.4 GHz only).
 
 The firmware publishes to flat topics under `mdm-g3-pcce/health`, so the server records it as device `esp32`. `python -m server.seed` already creates **PT-0003 "ESP32 Board"** bound to that device, so the board shows up on `/clinic` as soon as it publishes. On a database that was seeded before this change, re-run `python -m server.seed`; it only adds what's missing. In `/live`, add a patient with the channel `mdm-g3-pcce/health`.
 
@@ -169,7 +168,9 @@ First-run checklist after flashing:
 3. `/clinic` shows PT-0003 with data (not "No data yet").
 4. Keep a finger on the sensor for 2+ minutes of calm, normal readings before expecting an ML score (`/api/model`).
 
-**Temperature (LM35).** The server accepts a `temp` field in the vitals JSON and ignores values outside 25–45 °C (a floating or unplugged ADC pin) instead of raising false alerts. If the firmware can't read it, send `null`. Never send `nan`, because that isn't valid JSON and the whole message is dropped. The ML model needs temperature, so it stays idle until real `temp` values arrive; the rule-based alerts work without it.
+**Temperature (LM35).** The firmware sends `"temp"` only when a finger has been on the sensor for 30 s and the reading is plausible; otherwise it sends `null`, which the server treats as "no data". Expect `T --.-` on the OLED for the first 30 s after you place a finger.
+
+The LM35 measures *fingertip skin* temperature, which is usually 2–4 °C below body temperature. The firmware therefore adds `TEMP_OFFSET_C` (default `3.0`) and publishes an **estimated body temperature**. If you compare against a thermometer and it's off, change that one number at the top of `health_node.ino`. The server also ignores values outside 25–45 °C, so a loose wire can't cause false alerts.
 
 ## 8. Configuration
 
@@ -187,7 +188,21 @@ All server settings are environment variables (see `server/config.py`).
 
 The simulator reads `MQTT_HOST`, `MQTT_PORT`, and `MQTT_ROOT` too. To use a private broker, set the same values for the server and simulator, and edit them in `health_node.ino`.
 
-## 9. Troubleshooting
+## 9. Retraining the ML model
+
+Retraining is done in Colab or Kaggle (never on this PC), using `notebooks/noneeg_training.ipynb`.
+
+1. Upload the notebook to Colab and run all cells. It downloads the PhysioNet dataset itself.
+2. Optional: set `USE_TEMPERATURE = False` in the features cell to train without the temperature features (see below).
+3. The last cell writes `noneeg_artifacts.zip`. Unzip it and copy `model_personal_logreg.json` into `data/model_artifacts/` (overwrite the old file). Copy the other files too if you want to keep them in sync.
+4. Restart the server. Check <http://127.0.0.1:8000/api/model>: `"enabled": true` and `"error": null` mean the new model loaded. A bad file disables the model and the reason appears in `error`; the rest of the system keeps working.
+5. The model recalibrates per patient on the first 120 s of normal data, so no other change is needed.
+
+The server reads the feature list from the JSON, so any subset of the 15 known features works. It only needs the signals those features use, which means a model trained without temperature scores data from firmware that has no working LM35.
+
+Limits: the notebook can't use your own ESP32 recordings unless you label them as normal or stress. Changing the window length or feature definitions requires matching changes in `server/model.py`. Retraining does not change the rule-based alerts.
+
+## 10. Troubleshooting
 
 | Symptom | Fix |
 |---|---|
@@ -199,13 +214,13 @@ The simulator reads `MQTT_HOST`, `MQTT_PORT`, and `MQTT_ROOT` too. To use a priv
 | Port already in use | Use a different `--port` |
 | Reset all data | Stop the server and delete the DB file |
 
-## 10. Project status
+## 11. Project status
 
 **Working:** the ESP32 firmware (HR, SpO2, HRV, motion, falls, local alerts), MQTT ingestion, SQLite, REST API, rule-based and ML anomaly detection, the simulator, the live and history pages, the clinic/care layer, Docker and Render configs, and the Colab training notebook. All 50 unit tests pass.
 
 **Not done:**
 
-- **Real temperature.** The LM35 isn't implemented in the firmware.
+- **Real-hardware validation.** The firmware is compile-tested but has not been run on the board yet.
 - **On-device ML.** The TFLite model is exported but isn't integrated into the firmware.
 - **Research experiments.** The ablations, robustness, and latency comparisons are missing; see [`docs/experiments.md`](docs/experiments.md).
 - **Render deployment.** Not yet verified on a live URL.

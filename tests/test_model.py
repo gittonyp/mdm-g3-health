@@ -92,6 +92,51 @@ class PersonalizedModelTest(unittest.TestCase):
             self.assertEqual(scorer.features, FEATURES)
 
 
+class FeatureSubsetTest(unittest.TestCase):
+    NO_TEMP = [name for name in FEATURES if not name.startswith("temp_")]
+
+    def _artifact(self, features):
+        return {
+            "model_type": "personal_logreg",
+            "features": features,
+            "window_seconds": 4,
+            "step_seconds": 1,
+            "calibration_seconds": 4,
+            "normalization": {"method": "median_mad", "mad_scale": 1.4826, "min_scale": 1e-06},
+            "coefficients": [1.0] + [0.0] * (len(features) - 1),
+            "intercept": -3.0,
+            "decision_threshold": 0.5,
+        }
+
+    def test_model_without_temperature_scores_firmware_without_temperature(self):
+        scorer = model.PersonalizedModel(self._artifact(self.NO_TEMP))
+        buffer = model.DeviceBuffer(scorer, window_seconds=4, step_seconds=1, calibration_seconds=8)
+        for t in range(10):
+            buffer.add_vitals(float(t), {"hr": 70.0, "spo2": 98.0})
+            for i in range(10):
+                buffer.add_motion(t + i / 10.0, {"ax": 0.0, "ay": 0.0, "az": 1.0})
+            if t >= 4:
+                buffer.update(float(t), rule_level="normal")
+        self.assertTrue(scorer.ready)
+
+    def test_subset_features_come_back_in_artifact_order(self):
+        vitals = [(float(t), 70.0, 98.0, None) for t in range(31)]
+        motion = [(float(t) / 10.0, 0.0, 0.0, 1.0) for t in range(301)]
+        values = model.compute_features(
+            vitals, motion, 30.0, 30.0, features=["acc_std", "hr_mean"]
+        )
+        self.assertEqual(list(values), ["acc_std", "hr_mean"])
+
+    def test_rejects_unknown_feature_and_coefficient_mismatch(self):
+        bad = self._artifact(["hr_mean", "not_a_feature"])
+        with self.assertRaises(ValueError):
+            model.PersonalizedModel(bad)
+        mismatch = self._artifact(["hr_mean", "spo2_mean"])
+        mismatch["coefficients"] = [1.0]
+        with self.assertRaises(ValueError):
+            model.PersonalizedModel(mismatch)
+
+
 class DeviceBufferTest(unittest.TestCase):
     def _artifact(self):
         coefficients = [0.0] * len(FEATURES)

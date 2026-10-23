@@ -21,7 +21,7 @@ A working end-to-end IoT prototype for the project "Multimodal Edge-AI Based IoT
 | Area | State |
 |---|---|
 | ESP32 firmware (HR, SpO2, motion, fall, alerts) | Working |
-| Real temperature (LM35) | **Not implemented**; dashboard simulates 37-39 C when no `temp` is published |
+| Real temperature (LM35) | Implemented in firmware (compile-tested, not yet run on the board); dashboard simulates 37-39 C until `temp` arrives |
 | MQTT ingestion + SQLite + REST API | Working |
 | Live dashboard + server history page | Working |
 | Rule-based anomaly detection | Working |
