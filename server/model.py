@@ -141,7 +141,9 @@ class PersonalizedModel:
             midpoint = statistics.median(values)
             mad = statistics.median(abs(value - midpoint) for value in values) * 1.4826
             center.append(midpoint)
-            scale.append(mad if mad > self.min_scale else self.min_scale)
+            # Must match the training notebook: a (near-)constant feature gets scale 1.0,
+            # not min_scale, otherwise tiny deviations become enormous z-scores.
+            scale.append(mad if mad > self.min_scale else 1.0)
         self.center = center
         self.scale = scale
 
@@ -214,6 +216,10 @@ class DeviceBuffer:
 
         features = compute_features(self.vitals, self.motion, now, self.window_seconds)
         if features is None:
+            if not self.model.ready and not self.calibration_rows:
+                # No usable data yet (e.g. firmware without temperature): restart the
+                # calibration clock so it begins once complete data actually arrives.
+                self.first_ts = None
             return None
         self.last_window_ts = now
 

@@ -49,6 +49,12 @@ class Simulator:
         )
 
     def vitals(self, t):
+        payload = self._vitals(t)
+        if self.args.no_temp:
+            payload.pop("temp", None)
+        return payload
+
+    def _vitals(self, t):
         scenario = self.args.scenario
         if scenario == "no_finger":
             return {
@@ -160,6 +166,11 @@ def parse_args():
     parser.add_argument("--device", default="sim01")
     parser.add_argument("--scenario", choices=SCENARIOS, default="normal")
     parser.add_argument("--duration", type=int, default=60)
+    parser.add_argument(
+        "--no-temp",
+        action="store_true",
+        help="omit the temp field, like firmware without an LM35",
+    )
     parser.add_argument(
         "--host",
         default=os.getenv("MQTT_HOST", "broker.hivemq.com"),

@@ -1,3 +1,5 @@
+from . import config
+
 LEVEL_ORDER = {"normal": 0, "watch": 1, "alert": 2}
 
 
@@ -13,31 +15,31 @@ def evaluate_vitals(hr, spo2, temp):
     reasons = []
 
     if hr is not None:
-        if hr < 50 or hr > 120:
+        if hr < config.ACTIONABLE_HR_LOW or hr > config.ACTIONABLE_HR_HIGH:
             score = max(score, 0.95)
             level = _raise(level, "alert")
             reasons.append(f"heart rate {hr:.0f} bpm")
-        elif hr < 60 or hr > 100:
+        elif hr < config.WATCH_HR_LOW or hr > config.WATCH_HR_HIGH:
             score = max(score, 0.45)
             level = _raise(level, "watch")
             reasons.append(f"heart rate {hr:.0f} bpm")
 
     if spo2 is not None:
-        if spo2 < 92:
+        if spo2 < config.ACTIONABLE_SPO2:
             score = max(score, 0.95)
             level = _raise(level, "alert")
             reasons.append(f"SpO2 {spo2:.0f}%")
-        elif spo2 < 95:
+        elif spo2 < config.WATCH_SPO2:
             score = max(score, 0.45)
             level = _raise(level, "watch")
             reasons.append(f"SpO2 {spo2:.0f}%")
 
     if temp is not None:
-        if temp < 35.5 or temp >= 38.0:
+        if temp < config.ACTIONABLE_TEMP_LOW or temp >= config.ACTIONABLE_TEMP_HIGH:
             score = max(score, 0.9)
             level = _raise(level, "alert")
             reasons.append(f"temperature {temp:.1f} C")
-        elif temp < 36.1 or temp > 37.2:
+        elif temp < config.WATCH_TEMP_LOW or temp > config.WATCH_TEMP_HIGH:
             score = max(score, 0.4)
             level = _raise(level, "watch")
             reasons.append(f"temperature {temp:.1f} C")

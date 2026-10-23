@@ -133,6 +133,28 @@ class DeviceBufferTest(unittest.TestCase):
         self.assertEqual(result["source"], "model")
         self.assertEqual(buffer.status()["last_result"]["level"], "alert")
 
+    def test_calibration_starts_when_temperature_first_arrives(self):
+        buffer = model.DeviceBuffer(
+            model.PersonalizedModel(self._artifact()),
+            window_seconds=4,
+            step_seconds=1,
+            calibration_seconds=8,
+        )
+        # 30 s of data without temperature: no features, must not burn the calibration window.
+        for t in range(30):
+            buffer.add_vitals(float(t), {"hr": 70.0, "spo2": 98.0})
+            for i in range(10):
+                buffer.add_motion(t + i / 10.0, {"ax": 0.0, "ay": 0.0, "az": 1.0})
+            buffer.update(float(t), rule_level="normal")
+        self.assertFalse(buffer.model.ready)
+
+        for t in range(30, 45):
+            buffer.add_vitals(float(t), {"hr": 70.0, "spo2": 98.0, "temp": 36.5})
+            for i in range(10):
+                buffer.add_motion(t + i / 10.0, {"ax": 0.0, "ay": 0.0, "az": 1.0})
+            buffer.update(float(t), rule_level="normal")
+        self.assertTrue(buffer.model.ready)
+
 
 if __name__ == "__main__":
     unittest.main()

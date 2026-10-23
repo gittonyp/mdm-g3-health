@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 import paho.mqtt.client as mqtt
 
-from . import anomaly, config, db
+from . import alerts, anomaly, config, db
 from .model import DeviceBuffer, PersonalizedModel
 
 
@@ -32,6 +32,8 @@ class MqttIngestor:
         self.model = None
         self.model_error = None
         self.device_buffers = {}
+        self.engine = alerts.AlertEngine()
+        self._motion = {}
         if config.MODEL_ENABLED:
             try:
                 self.model = PersonalizedModel.from_file(config.MODEL_PATH)
@@ -66,10 +68,28 @@ class MqttIngestor:
         device_id, kind = parsed
         if kind not in {"vitals", "motion", "event", "status"}:
             return
-
-        ts = utc_now()
-        now = time.time()
         payload = msg.payload.decode("utf-8", errors="replace")
+        self.process_payload(device_id, kind, payload)
+
+    def _motion_deviation(self, device_id, now_epoch):
+        entry = self._motion.get(device_id)
+        if entry is None:
+            return None
+        recorded_at, deviation = entry
+        if now_epoch - recorded_at > 30:
+            return None
+        return deviation
+
+    def _patient_for(self, device_id):
+        binding = db.get_active_binding(device_id)
+        if binding is None:
+            return None, None
+        return db.get_patient(binding["patient_id"]), binding
+
+    def process_payload(self, device_id, kind, payload, ts=None, now=None):
+        ts = ts or utc_now()
+        now_epoch = time.time() if now is None else now
+        now_dt = datetime.fromtimestamp(now_epoch, tz=timezone.utc)
         db.add_message(device_id, kind, payload, ts)
 
         if kind == "status":
@@ -83,6 +103,13 @@ class MqttIngestor:
             data = json.loads(payload)
         except json.JSONDecodeError:
             return
+        if not isinstance(data, dict):
+            return
+
+        if kind == "vitals":
+            data["temp"] = self._valid_temp(data.get("temp"))
+
+        patient, _binding = self._patient_for(device_id)
 
         if kind == "vitals":
             result = anomaly.evaluate_vitals(
@@ -92,8 +119,15 @@ class MqttIngestor:
             )
             db.add_vitals(device_id, data, ts)
             if result["level"] != "normal":
-                self._maybe_publish_anomaly(client, device_id, result, ts)
-            self._update_model(client, device_id, now, data, result["level"], ts)
+                self._maybe_publish_anomaly(self.client, device_id, result, ts)
+            if patient is not None:
+                motion_g = self._motion_deviation(device_id, now_epoch)
+                self.engine.observe_vitals(
+                    patient, device_id, data, result, motion_g, now_dt
+                )
+            self._update_model(
+                device_id, now_epoch, data, result["level"], ts, patient, now_dt
+            )
         elif kind == "motion":
             db.upsert_device(
                 device_id,
@@ -101,15 +135,36 @@ class MqttIngestor:
                 status="online",
                 activity=data.get("act"),
             )
+            ax = data.get("ax") or 0.0
+            ay = data.get("ay") or 0.0
+            az = data.get("az") or 0.0
+            self._motion[device_id] = (
+                now_epoch,
+                abs((ax * ax + ay * ay + az * az) ** 0.5 - 1.0),
+            )
             buffer = self._buffer(device_id)
             if buffer:
-                buffer.add_motion(now, data)
+                buffer.add_motion(now_epoch, data)
         elif kind == "event":
             event_type = str(data.get("type", "event"))
             db.add_event(device_id, event_type, payload, ts)
             if event_type == "fall":
                 db.add_anomaly(device_id, 1.0, "alert", "fall detected", ts)
                 db.upsert_device(device_id, ts, status="online", state="fall")
+                if patient is not None:
+                    self.engine.observe_event(patient, device_id, event_type, now_dt)
+
+    @staticmethod
+    def _valid_temp(value):
+        if value is None or isinstance(value, bool):
+            return None
+        try:
+            temp = float(value)
+        except (TypeError, ValueError):
+            return None
+        if not config.TEMP_VALID_MIN <= temp <= config.TEMP_VALID_MAX:
+            return None
+        return temp
 
     def _buffer(self, device_id):
         if not self.model:
@@ -123,14 +178,46 @@ class MqttIngestor:
             self.device_buffers[device_id] = buffer
         return buffer
 
-    def _update_model(self, client, device_id, now, data, rule_level, ts):
+    def _update_model(self, device_id, now, data, rule_level, ts, patient, now_dt):
         buffer = self._buffer(device_id)
         if buffer is None:
             return
         buffer.add_vitals(now, data)
         result = buffer.update(now, rule_level)
-        if result and result["level"] != "normal":
-            self._maybe_publish_anomaly(client, device_id, result, ts)
+        status = buffer.status()
+        baseline = None
+        if status.get("ready"):
+            rows = [row for row in buffer.vitals if row[1] is not None or row[2] is not None]
+            if rows:
+                hr_values = [row[1] for row in rows if row[1] is not None]
+                spo2_values = [row[2] for row in rows if row[2] is not None]
+                temp_values = [row[3] for row in rows if row[3] is not None]
+                baseline = {
+                    "hr": sum(hr_values) / len(hr_values) if hr_values else None,
+                    "spo2": sum(spo2_values) / len(spo2_values) if spo2_values else None,
+                    "temp": sum(temp_values) / len(temp_values) if temp_values else None,
+                }
+        if patient is not None:
+            db.upsert_baseline(
+                device_id,
+                patient["id"],
+                status.get("ready", False),
+                status.get("calibration_windows", 0),
+                config.BASELINE_WINDOWS_REQUIRED,
+                hr_baseline=(baseline or {}).get("hr"),
+                spo2_baseline=(baseline or {}).get("spo2"),
+                temp_baseline=(baseline or {}).get("temp"),
+                calibrated_at=ts if status.get("ready") else None,
+                stale=not status.get("ready", False),
+                now=ts,
+            )
+            if baseline:
+                self.engine.set_baseline(device_id, baseline, now_dt)
+            if result and result["level"] != "normal":
+                self._maybe_publish_anomaly(self.client, device_id, result, ts)
+                self.engine.observe_model(patient, device_id, result, now_dt)
+        elif result and result["level"] != "normal":
+            self._maybe_publish_anomaly(self.client, device_id, result, ts)
 
     def reset_calibration(self, device_id):
         self.device_buffers.pop(device_id, None)
