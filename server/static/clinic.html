@@ -1,2 +1,141 @@
-<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Remote Care Clinic</title><link rel="stylesheet" href="/static/clinic.css"><script src="/static/clinic.js"></script></head><body><main class="clinic-shell"><nav id="nav" class="clinic-nav"></nav><section id="system-banner"></section><header><h1>Remote Care Clinic</h1><p class="muted">Who needs attention today?</p></header><section id="counts" class="clinic-card"></section><section class="clinic-card clinic-grid"><label>Program<select id="program"><option value="">All programs</option><option>hospice</option><option>telehealth</option></select></label><label>Status<select id="status"><option value="">All</option><option value="action">Needs action</option><option value="overdue">Overdue</option></select></label><button class="btn" id="add">Add patient</button></section><section id="error" class="error"></section><section id="worklist"></section></main><dialog id="patient-dialog"><form method="dialog" id="patient-form"><h2>Add patient</h2><label>Name<input name="display_name" required></label><label>DOB<input name="dob" type="date" required></label><label>Program<select name="program"><option>hospice</option><option>telehealth</option></select></label><label>Device ID<input name="device_id" required></label><label>Caregiver<input name="caregiver_name"></label><p><button class="btn btn-ghost" value="cancel">Cancel</button> <button class="btn" value="default">Create</button></p></form></dialog><script>
-ClinicUI.renderNav('clinic');const out=document.querySelector('#worklist'),err=document.querySelector('#error');let rows=[];function render(){const program=document.querySelector('#program').value,status=document.querySelector('#status').value;const filtered=rows.filter(p=>(!program||p.program===program)&&(!status||(status==='action'&&['emergency','actionable','quality'].includes(p.tier))||(status==='overdue'&&p.overdue)));out.innerHTML=filtered.map(p=>`<article class="clinic-card patient-card ${ClinicUI.tierClass(p.tier)}" tabindex="0" onclick="location='/clinic/patient/${p.patient_id}'" onkeydown="if(event.key==='Enter')location='/clinic/patient/${p.patient_id}'"><h2>${ClinicUI.esc(p.display_name)} <small>${p.patient_id}</small></h2><div>${p.program} · <b>${p.tier}</b> · ${ClinicUI.esc(p.status)}</div><p>${ClinicUI.esc(p.what_changed)}<br><span class="muted">${ClinicUI.esc(p.data_quality)} · ${ClinicUI.esc(p.next_action)}</span></p></article>`).join('')||'<div class="clinic-card">No patients need review.</div>'}async function load(){try{const d=await ClinicUI.api('/api/clinic/worklist');rows=d.patients;document.querySelector('#counts').textContent=`${d.counts.patients} patients · ${d.counts.need_action} need action · ${d.counts.overdue} overdue · last sync ${ClinicUI.fmtDateTime(d.generated_at)}`;document.querySelector('#system-banner').innerHTML=d.broker_connected?'':'<div class="clinic-banner">Live data unavailable - clinical status is Unknown</div>';render()}catch(e){err.textContent=e.message}}ClinicUI.poll(load,10000);document.querySelector('#program').onchange=render;document.querySelector('#status').onchange=render;document.querySelector('#add').onclick=()=>ClinicUI.openDialog('patient-dialog');document.querySelector('#patient-form').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);try{await ClinicUI.api('/api/patients',{method:'POST',body:JSON.stringify(Object.fromEntries(f))});e.target.closest('dialog').close();e.target.reset();load()}catch(x){err.textContent=x.message}};</script></body></html>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Clinic - Remote Care</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/static/clinic.css">
+<script src="/static/nav.js"></script>
+<script src="/static/clinic.js"></script>
+</head>
+<body>
+<div class="wrap">
+  <nav id="nav"></nav>
+  <section id="system-banner"></section>
+
+  <div class="page-head">
+    <h1>Remote Care Clinic</h1>
+    <p class="sub">Who needs attention today? Most urgent first.</p>
+  </div>
+
+  <section id="counts" class="stats" aria-live="polite"></section>
+
+  <section class="card toolbar">
+    <label>Program
+      <select id="program">
+        <option value="">All programs</option>
+        <option value="hospice">Hospice</option>
+        <option value="telehealth">Telehealth</option>
+      </select>
+    </label>
+    <label>Show
+      <select id="status">
+        <option value="">Everyone</option>
+        <option value="action">Needs action</option>
+        <option value="overdue">Overdue</option>
+      </select>
+    </label>
+    <button class="btn btn-primary" id="add" type="button">+ Add patient</button>
+  </section>
+
+  <p id="error" class="error" role="alert"></p>
+  <section id="worklist" class="worklist" aria-live="polite"><div class="skeleton"></div><div class="skeleton"></div></section>
+  <p id="updated" class="muted" style="margin-top:12px"></p>
+</div>
+
+<dialog id="patient-dialog">
+  <form method="dialog" id="patient-form">
+    <h2>Add patient</h2>
+    <label>Name<input name="display_name" required autocomplete="off"></label>
+    <label>Date of birth<input name="dob" type="date" required></label>
+    <label>Program
+      <select name="program"><option value="hospice">Hospice</option><option value="telehealth">Telehealth</option></select>
+    </label>
+    <label>Device ID<input name="device_id" required placeholder="esp32" autocomplete="off"></label>
+    <p class="muted">Use <b>esp32</b> for the real board, or <b>sim01</b> / <b>sim02</b> for the simulator.</p>
+    <label>Caregiver (optional)<input name="caregiver_name" autocomplete="off"></label>
+    <p id="form-error" class="error" role="alert"></p>
+    <div class="btns">
+      <button class="btn" value="cancel" type="button" id="cancel">Cancel</button>
+      <button class="btn btn-primary" type="submit">Create patient</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+ClinicUI.renderNav('clinic');
+const out = document.querySelector('#worklist'), err = document.querySelector('#error');
+let rows = [], loaded = false;
+
+function vitalsBlock(p) {
+  const v = p.latest_vital, good = p.data_quality === 'good' && v;
+  if (!good) {
+    const why = p.data_quality === 'missing' ? 'No device is linked to this patient.' : 'No live values shown (' + ClinicUI.qualityLabel(p.data_quality).toLowerCase() + ').';
+    return '<div class="vitals"><div class="vitals-note">' + ClinicUI.esc(why) + '</div></div>';
+  }
+  return '<div class="vitals">' +
+    ClinicUI.vitalTile('Heart rate', 'hr', v.hr, 'bpm', 0) +
+    ClinicUI.vitalTile('SpO2', 'spo2', v.spo2, '%', 0) +
+    ClinicUI.vitalTile('Temperature', 'temp', v.temp, '\u00b0C', 1) + '</div>';
+}
+
+function card(p) {
+  const age = p.latest_vital ? ClinicUI.fmtAge(ClinicUI.ageSeconds(p.latest_vital.ts)) : '';
+  const prog = p.program ? p.program.charAt(0).toUpperCase() + p.program.slice(1) : '';
+  return '<a class="card patient-card stripe ' + ClinicUI.tierClass(p.tier) + '" href="/clinic/patient/' + encodeURIComponent(p.patient_id) + '">' +
+    '<div class="row between"><h3>' + ClinicUI.esc(p.display_name) + '<small>' + ClinicUI.esc(p.patient_id) + '</small></h3>' +
+    '<div class="row"><span class="badge ' + ClinicUI.tierClass(p.tier) + '">' + ClinicUI.tierLabel(p.tier) + '</span>' +
+    (p.overdue ? '<span class="badge tier-emergency">Overdue</span>' : '') + '</div></div>' +
+    '<div class="why">' + ClinicUI.esc(p.what_changed) + '</div>' +
+    '<div class="meta">' + ClinicUI.esc(prog) + ' \u00b7 ' + ClinicUI.esc(p.status) + (p.next_action ? ' \u00b7 ' + (/^next/i.test(p.next_action) ? '' : 'Next: ') + ClinicUI.esc(p.next_action) : '') +
+    (age ? ' \u00b7 Reading ' + ClinicUI.esc(age) : '') + '</div>' +
+    vitalsBlock(p) + '</a>';
+}
+
+function render() {
+  const program = document.querySelector('#program').value, status = document.querySelector('#status').value;
+  const filtered = rows.filter(p => (!program || p.program === program) &&
+    (!status || (status === 'action' && ['emergency', 'actionable', 'quality'].includes(p.tier)) || (status === 'overdue' && p.overdue)));
+  out.innerHTML = filtered.map(card).join('') ||
+    '<div class="card empty">' + (rows.length ? 'No patients match this filter.' : 'No patients yet. Click \u201c+ Add patient\u201d to start.') + '</div>';
+}
+
+function stat(label, n, hot, bad) {
+  return '<div class="stat' + (hot && n > 0 ? ' hot' + (bad ? ' bad' : '') : '') + '"><b>' + n + '</b><span>' + label + '</span></div>';
+}
+
+async function load() {
+  try {
+    const d = await ClinicUI.api('/api/clinic/worklist');
+    rows = d.patients; loaded = true; err.textContent = '';
+    const c = d.counts, emergencies = rows.filter(p => p.tier === 'emergency').length;
+    document.querySelector('#counts').innerHTML = stat('Patients', c.patients) + stat('Need action', c.need_action, true, emergencies > 0) + stat('Overdue', c.overdue, true, true) + stat('No data', c.unknown);
+    document.querySelector('#system-banner').innerHTML = d.broker_connected ? '' :
+      '<div class="banner">Live data is unavailable (server cannot reach the MQTT broker). Patient status is shown as unknown.</div>';
+    document.querySelector('#updated').textContent = 'Updated ' + ClinicUI.fmtDateTime(d.generated_at) + ' \u00b7 refreshes every 10 s';
+    render();
+  } catch (e) {
+    err.textContent = loaded ? 'Connection problem: ' + e.message + ' (showing last data)' : e.message;
+  }
+}
+
+ClinicUI.poll(load, 10000);
+document.querySelector('#program').onchange = render;
+document.querySelector('#status').onchange = render;
+document.querySelector('#add').onclick = () => { document.querySelector('#form-error').textContent = ''; ClinicUI.openDialog('patient-dialog'); };
+document.querySelector('#cancel').onclick = () => document.querySelector('#patient-dialog').close();
+document.querySelector('#patient-form').onsubmit = async e => {
+  e.preventDefault();
+  const f = Object.fromEntries(new FormData(e.target));
+  if (!f.caregiver_name) delete f.caregiver_name;
+  f.caregiver_available = f.caregiver_name ? 1 : 0;
+  try {
+    await ClinicUI.api('/api/patients', { method: 'POST', body: JSON.stringify(f) });
+    document.querySelector('#patient-dialog').close(); e.target.reset();
+    ClinicUI.toast('Patient added'); load();
+  } catch (x) { document.querySelector('#form-error').textContent = x.message; }
+};
+</script>
+</body>
+</html>

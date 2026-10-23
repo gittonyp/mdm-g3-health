@@ -1,2 +1,197 @@
-<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Patient</title><link rel="stylesheet" href="/static/clinic.css"><script src="/static/clinic.js"></script></head><body><main class="clinic-shell"><nav id="nav" class="clinic-nav"></nav><section id="content"></section></main><script>
-ClinicUI.renderNav('clinic');const id=location.pathname.split('/').pop(),root=document.querySelector('#content');async function load(){try{const d=await ClinicUI.api('/api/patients/'+encodeURIComponent(id));const p=d.patient,v=d.latest_vital||{};root.innerHTML=`<a href="/clinic">← Worklist</a><header class="clinic-card"><h1>${ClinicUI.esc(p.display_name)} <small>${p.id}</small></h1><p>${p.program} · DOB ${p.dob} · Device ${d.device?d.device.device_id:'Unknown'}</p></header><section class="clinic-grid">${[['Heart rate','hr','bpm'],['SpO2','spo2','%'],['Temperature','temp','C']].map(x=>`<div class="clinic-card"><div class="muted">${x[0]}</div><h2>${ClinicUI.fmtValue(v[x[1]],x[1]==='temp'?1:0)} ${x[2]}</h2></div>`).join('')}</section><section class="clinic-card"><h2>Open alerts</h2>${d.open_alerts.map(a=>`<article class="${ClinicUI.tierClass(a.tier)}"><b>${a.tier}</b> — ${ClinicUI.esc(a.reason)}<p>${ClinicUI.esc(a.display_status)} · ${ClinicUI.esc(a.next_action)}</p><button class="btn" onclick="ack(${a.id})">Acknowledge</button> <button class="btn btn-danger" onclick="resolveAlert(${a.id})">Resolve</button></article>`).join('')||'<p>No open alerts.</p>'}</section><section class="clinic-card"><h2>Notes</h2>${d.notes.map(n=>`<p><b>${n.kind}</b> ${ClinicUI.esc(n.text)}</p>`).join('')||'<p>No notes.</p>'}</section>`}catch(e){root.innerHTML=`<p class="error">${ClinicUI.esc(e.message)}</p>`}}async function ack(i){await ClinicUI.api('/api/alerts/'+i+'/ack',{method:'POST'});load()}async function resolveAlert(i){const note=prompt('Resolution note');if(note)await ClinicUI.api('/api/alerts/'+i+'/resolve',{method:'POST',body:JSON.stringify({note})});load()}load();</script></body></html>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Patient - Remote Care</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/static/clinic.css">
+<script src="/static/nav.js"></script>
+<script src="/static/clinic.js"></script>
+</head>
+<body>
+<div class="wrap">
+  <nav id="nav"></nav>
+  <a class="back" href="/clinic">&larr; Back to worklist</a>
+  <p id="error" class="error" role="alert"></p>
+
+  <section id="summary"><div class="skeleton"></div><div class="skeleton"></div></section>
+
+  <section class="card">
+    <div class="row between" style="margin-bottom:12px">
+      <h2 style="margin:0">Trends</h2>
+      <div class="seg" id="range" role="group" aria-label="Time range">
+        <button type="button" data-h="1" class="on">1 h</button>
+        <button type="button" data-h="6">6 h</button>
+        <button type="button" data-h="24">24 h</button>
+      </div>
+    </div>
+    <div class="charts">
+      <div class="chart"><h3><span>Heart rate (bpm)</span></h3><svg id="c-hr" role="img" aria-label="Heart rate trend"></svg></div>
+      <div class="chart"><h3><span>SpO2 (%)</span></h3><svg id="c-spo2" role="img" aria-label="SpO2 trend"></svg></div>
+      <div class="chart"><h3><span>Temperature (&deg;C)</span></h3><svg id="c-temp" role="img" aria-label="Temperature trend"></svg></div>
+    </div>
+    <p class="legend">Vertical lines mark alerts and notes (hover for details). The dashed green line is the patient's own baseline, once calibrated.</p>
+  </section>
+
+  <section class="card">
+    <h2>Open alerts</h2>
+    <div id="open-alerts"></div>
+  </section>
+
+  <section class="card">
+    <h2>Recent alert history</h2>
+    <div class="table-wrap" id="history"></div>
+  </section>
+
+  <section class="card">
+    <h2>Notes</h2>
+    <form class="note-form" id="note-form">
+      <label>Type
+        <select name="kind">
+          <option value="clinical">Clinical</option>
+          <option value="caregiver">Caregiver</option>
+          <option value="visit">Visit</option>
+          <option value="follow_up">Follow-up</option>
+        </select>
+      </label>
+      <label>Note<input name="text" required autocomplete="off" placeholder="Write a note..."></label>
+      <button class="btn btn-primary" type="submit">Add note</button>
+    </form>
+    <div class="notes-list" id="notes"></div>
+  </section>
+</div>
+
+<dialog id="resolve-dialog">
+  <form method="dialog" id="resolve-form">
+    <h2>Resolve alert</h2>
+    <p class="muted" id="resolve-what"></p>
+    <label>What was done? (required)<textarea name="note" required></textarea></label>
+    <p id="resolve-error" class="error" role="alert"></p>
+    <div class="btns">
+      <button class="btn" type="button" id="resolve-cancel">Cancel</button>
+      <button class="btn btn-danger" type="submit">Resolve</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+ClinicUI.renderNav('clinic');
+const id = decodeURIComponent(location.pathname.split('/').pop());
+const E = ClinicUI.esc, $ = s => document.querySelector(s);
+let hours = 1, resolving = null, current = null;
+
+function field(label, value) { return value ? '<div><span>' + E(label) + '</span><b>' + E(value) + '</b></div>' : ''; }
+
+function renderSummary(d) {
+  const p = d.patient, v = d.latest_vital, b = d.baseline;
+  const open = d.open_alerts, worst = open.slice().sort((a, c) => ['emergency','actionable','quality','watch'].indexOf(a.tier) - ['emergency','actionable','quality','watch'].indexOf(c.tier))[0];
+  const tier = worst ? worst.tier : (v ? 'stable' : 'unknown');
+  const age = v ? ClinicUI.ageSeconds(v.ts) : null;
+  const fresh = v && age != null && age <= 90 && v.finger !== 0;
+  const deviceLine = d.device
+    ? 'Device <b>' + E(d.device.device_id) + '</b> \u00b7 ' + (v ? 'last reading ' + E(ClinicUI.fmtAge(age)) : 'no readings yet')
+    : 'No device linked';
+  let baseline = 'Baseline: not started';
+  if (b) baseline = b.ready ? 'Baseline: calibrated' + (b.stale ? ' (needs refresh)' : '') : 'Baseline: learning (' + Math.min(b.windows_collected, b.windows_required) + '/' + b.windows_required + ' windows)';
+  const vitals = fresh
+    ? ClinicUI.vitalTile('Heart rate', 'hr', v.hr, 'bpm', 0) + ClinicUI.vitalTile('SpO2', 'spo2', v.spo2, '%', 0) + ClinicUI.vitalTile('Temperature', 'temp', v.temp, '\u00b0C', 1)
+    : '<div class="vitals-note">No live values: ' + (!v ? 'no readings yet.' : v.finger === 0 && age <= 90 ? 'no finger on the sensor.' : 'last reading was ' + E(ClinicUI.fmtAge(age)) + '.') + '</div>';
+  $('#summary').innerHTML =
+    '<section class="card stripe ' + ClinicUI.tierClass(tier) + '"><div class="row between"><h1>' + E(p.display_name) + ' <small class="muted">' + E(p.id) + '</small></h1>' +
+    '<span class="badge ' + ClinicUI.tierClass(tier) + '">' + ClinicUI.tierLabel(tier) + '</span></div>' +
+    '<p class="muted" style="margin-top:6px">' + deviceLine + ' \u00b7 ' + E(baseline) + '</p>' +
+    '<div class="vitals">' + vitals + '</div>' +
+    '<div class="profile">' + field('Program', p.program) + field('Date of birth', p.dob) + field('Condition', p.primary_condition) +
+    field('Reason for monitoring', p.reason_for_monitoring) + field('Goals of care', p.goals_of_care) + field('Mobility', p.mobility) +
+    field('Medications', p.medications) + field('Caregiver', p.caregiver_name ? p.caregiver_name + (p.caregiver_available ? '' : ' (unavailable)') : 'None assigned') + '</div></section>';
+}
+
+function evidenceText(a) {
+  const ev = a.evidence || {}, parts = [], r = v => (typeof v === 'number' ? Math.round(v * 10) / 10 : v);
+  if (ev.value != null) parts.push('value ' + r(ev.value));
+  if (ev.threshold != null) parts.push('threshold ' + r(ev.threshold));
+  if (ev.baseline != null) parts.push('baseline ' + r(ev.baseline));
+  if (ev.motion_g != null) parts.push('motion ' + Number(ev.motion_g).toFixed(2) + ' g');
+  if (a.score != null) parts.push('score ' + a.score);
+  return parts.join(' \u00b7 ');
+}
+
+function renderAlerts(d) {
+  $('#open-alerts').innerHTML = d.open_alerts.map(a =>
+    '<article class="alert-item stripe ' + ClinicUI.tierClass(a.tier) + '"><div class="row between"><span class="badge ' + ClinicUI.tierClass(a.tier) + '">' + ClinicUI.tierLabel(a.tier) + '</span>' +
+    '<span class="muted">' + E(ClinicUI.fmtAge(a.age_s)) + (a.overdue ? ' \u00b7 <b style="color:var(--bad)">overdue</b>' : '') + '</span></div>' +
+    '<div class="reason">' + E(a.reason) + '</div>' +
+    '<div class="muted" style="margin-top:4px">' + E(a.display_status) + (a.next_action ? ' \u00b7 Next: ' + E(a.next_action) : '') + '</div>' +
+    (evidenceText(a) ? '<div class="muted">Evidence: ' + E(evidenceText(a)) + '</div>' : '') +
+    '<div class="actions">' + (a.status === 'open' ? '<button class="btn btn-primary" data-ack="' + a.id + '">Acknowledge</button>' : '<span class="badge plain">Acknowledged by ' + E(a.acknowledged_by || '') + '</span>') +
+    '<button class="btn btn-danger" data-resolve="' + a.id + '" data-reason="' + E(a.reason) + '">Resolve\u2026</button></div></article>'
+  ).join('') || '<div class="empty">No open alerts.</div>';
+
+  $('#history').innerHTML = d.recent_alerts.length
+    ? '<table><thead><tr><th>Time</th><th>Level</th><th>Reason</th><th>Status</th></tr></thead><tbody>' + d.recent_alerts.map(a =>
+        '<tr><td>' + E(ClinicUI.fmtDateTime(a.created_at)) + '</td><td><span class="badge ' + ClinicUI.tierClass(a.tier) + '">' + ClinicUI.tierLabel(a.tier) + '</span></td><td>' + E(a.reason) +
+        '</td><td>' + E(a.status === 'resolved' ? 'Resolved' + (a.resolution_note ? ': ' + a.resolution_note : '') : a.display_status || a.status) + '</td></tr>').join('') + '</tbody></table>'
+    : '<div class="empty">No alerts recorded yet.</div>';
+
+  $('#notes').innerHTML = d.notes.map(n =>
+    '<div class="note"><span class="badge plain">' + E(n.kind.replace('_', '-')) + '</span> ' + E(n.text) +
+    '<div class="who">' + E(n.author) + ' \u00b7 ' + E(ClinicUI.fmtDateTime(n.ts)) + '</div></div>').join('') || '<div class="empty">No notes yet.</div>';
+}
+
+async function load() {
+  try {
+    const d = await ClinicUI.api('/api/patients/' + encodeURIComponent(id));
+    current = d; $('#error').textContent = '';
+    document.title = d.patient.display_name + ' - Remote Care';
+    renderSummary(d); renderAlerts(d);
+  } catch (e) { $('#error').textContent = e.message; if (!current) $('#summary').innerHTML = ''; }
+}
+
+async function loadTrends() {
+  try {
+    const t = await ClinicUI.api('/api/patients/' + encodeURIComponent(id) + '/trends?hours=' + hours);
+    const bl = t.baseline || {};
+    [['hr', 'c-hr', 0], ['spo2', 'c-spo2', 0], ['temp', 'c-temp', 1]].forEach(([k, el, dec]) =>
+      ClinicUI.drawChart($('#' + el), t.series, k, { baseline: bl[k], markers: t.markers, decimals: dec }));
+  } catch (e) { /* the main error line already reports connectivity problems */ }
+}
+
+document.addEventListener('click', async e => {
+  const ackId = e.target.dataset && e.target.dataset.ack, resId = e.target.dataset && e.target.dataset.resolve;
+  if (ackId) {
+    try { await ClinicUI.api('/api/alerts/' + ackId + '/ack', { method: 'POST' }); ClinicUI.toast('Alert acknowledged'); load(); }
+    catch (x) { ClinicUI.toast(x.message, true); }
+  } else if (resId) {
+    resolving = resId; $('#resolve-what').textContent = e.target.dataset.reason; $('#resolve-error').textContent = '';
+    $('#resolve-form').reset(); ClinicUI.openDialog('resolve-dialog');
+  }
+});
+$('#resolve-cancel').onclick = () => $('#resolve-dialog').close();
+$('#resolve-form').onsubmit = async e => {
+  e.preventDefault();
+  const note = new FormData(e.target).get('note').trim();
+  if (!note) { $('#resolve-error').textContent = 'A note is required.'; return; }
+  try {
+    await ClinicUI.api('/api/alerts/' + resolving + '/resolve', { method: 'POST', body: JSON.stringify({ note }) });
+    $('#resolve-dialog').close(); ClinicUI.toast('Alert resolved'); load(); loadTrends();
+  } catch (x) { $('#resolve-error').textContent = x.message; }
+};
+$('#note-form').onsubmit = async e => {
+  e.preventDefault();
+  const f = Object.fromEntries(new FormData(e.target));
+  try {
+    await ClinicUI.api('/api/patients/' + encodeURIComponent(id) + '/notes', { method: 'POST', body: JSON.stringify(f) });
+    e.target.elements.text.value = ''; ClinicUI.toast('Note added'); load(); loadTrends();
+  } catch (x) { ClinicUI.toast(x.message, true); }
+};
+$('#range').onclick = e => {
+  const h = e.target.dataset && e.target.dataset.h; if (!h) return;
+  hours = Number(h); document.querySelectorAll('#range button').forEach(b => b.classList.toggle('on', b === e.target)); loadTrends();
+};
+
+ClinicUI.poll(load, 5000);
+ClinicUI.poll(loadTrends, 20000);
+</script>
+</body>
+</html>

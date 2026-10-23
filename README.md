@@ -116,9 +116,8 @@ Check progress at <http://127.0.0.1:8010/api/model>.
 
 ### Live dashboard with the simulator
 
-1. Open `/live`.
-2. Click **Add patient**.
-3. Enter the MQTT channel `mdm-g3-pcce/health/sim01` (use the device name you started).
+1. Open `/live`. On the first visit it adds **ESP32 Board** (channel `mdm-g3-pcce/health`) automatically, so the real board works with no setup.
+2. For a simulator device, click **Add patient** and enter the channel `mdm-g3-pcce/health/sim01` (use the device name you started).
 
 ## 5. Run the tests
 

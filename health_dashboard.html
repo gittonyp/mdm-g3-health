@@ -3,35 +3,30 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Patient vitals monitor</title>
+<title>Live monitor - Remote Care</title>
 <link rel="icon" href="data:,">
+<script src="/static/nav.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/mqtt@5.10.1/dist/mqtt.min.js"></script>
 <style>
 :root{
-  --ink:#14213d; --muted:#5b6a85; --paper:#edf1f7; --panel:#ffffff; --line:#d9e0ec; --band:rgba(14,143,131,.10);
-  --ok:#0e8f83; --warn:#b97a0b; --bad:#d23f37; --brand:#1b3a6b; --state:var(--muted);
+  --ink:#16233f; --muted:#5d6b85; --paper:#eef1f6; --panel:#ffffff; --line:#d7dde8; --band:rgba(14,143,131,.10);
+  --ok:#0e8f83; --warn:#b97a0b; --bad:#d23f37; --brand:#16233f; --state:var(--muted);
   --shadow:0 1px 2px rgba(20,33,61,.06),0 4px 14px rgba(20,33,61,.05);
   font-family:"Segoe UI",system-ui,-apple-system,Roboto,"Helvetica Neue",Arial,sans-serif;
 }
-@media (prefers-color-scheme:dark){
-  :root{--ink:#e8edf7;--muted:#9aa7c2;--paper:#0e1526;--panel:#162039;--line:#27345a;--band:rgba(40,200,184,.12);
-        --ok:#2cc4b2;--warn:#e0a63a;--bad:#ff6b62;--brand:#8fb4ff;--shadow:none}
-}
+
 *{box-sizing:border-box}
 body{margin:0;background:var(--paper);color:var(--ink);font-variant-numeric:tabular-nums;-webkit-font-smoothing:antialiased}
 body[data-state="normal"]{--state:var(--ok)}
 body[data-state="measuring"],body[data-state="no_finger"]{--state:var(--warn)}
 body[data-state="alert"],body[data-state="fall"]{--state:var(--bad)}
-.wrap{max-width:1180px;margin:0 auto;padding:18px 20px 28px}
+.wrap{max-width:1180px;margin:0 auto;padding:18px 20px 48px}
 
-/* top bar */
-.top{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}
-.brand{display:flex;align-items:center;gap:12px}
-.logo{width:38px;height:38px;border-radius:10px;background:var(--brand);display:grid;place-items:center}
-.logo svg{width:22px;height:22px}
-h1{font-size:19px;line-height:1.2;margin:0;font-weight:650}
-.sub{font-size:13px;color:var(--muted)}
-.pills{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+/* page title + controls (the site navigation above is shared: /static/nav.js) */
+.page-head{margin:4px 0 16px}
+h1{font-size:22px;line-height:1.2;margin:0;font-weight:650;letter-spacing:.2px}
+.sub{font-size:14px;color:var(--muted);margin-top:4px}
+.pills{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:14px}
 .pill{display:flex;align-items:center;gap:7px;background:var(--panel);border:1px solid var(--line);border-radius:999px;padding:5px 12px;font-size:13px;box-shadow:var(--shadow)}
 .dot{width:9px;height:9px;border-radius:50%;background:#98a3b8}
 .dot.on{background:var(--ok);box-shadow:0 0 0 3px rgba(14,143,131,.18)}
@@ -80,7 +75,7 @@ body[data-state="fall"] .banner{animation:flash 1s steps(2) infinite}
 
 .foot{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;margin-top:14px;font-size:13px;color:var(--muted)}
 button{font:inherit;font-weight:600;background:var(--brand);color:#fff;border:0;border-radius:8px;padding:9px 16px;cursor:pointer;transition:filter .15s}
-@media (prefers-color-scheme:dark){button{color:#0e1526}}
+
 button:hover{filter:brightness(1.12)}
 button:focus-visible{outline:3px solid #7aa7ff;outline-offset:2px}
 
@@ -111,24 +106,20 @@ dialog .btns{justify-content:flex-end}
 </head>
 <body data-state="offline">
 <div class="wrap">
-  <header class="top">
-    <div class="brand">
-      <div class="logo" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l2-5 4 10 2-5h6"/></svg></div>
-      <div>
-        <h1>Patient vitals monitor</h1>
-        <div class="sub">Continuous monitoring from the wearable sensor node</div>
-      </div>
-    </div>
-    <div class="pills">
-      <label class="sel"><span>Patient</span><select id="devSel" aria-label="Select patient"></select></label>
-      <button class="ghost" id="add">Add patient</button>
-      <a class="ghost" href="/clinic">Clinic</a>
-      <button class="ghost" id="hist">Server history</button>
-      <div class="pill"><i class="dot" id="dSrv"></i><span id="tSrv">Server offline</span></div>
-      <div class="pill"><i class="dot" id="dDev"></i><span id="tDev">Device offline</span></div>
-      <div class="pill" id="clock">--:--:--</div>
-    </div>
-  </header>
+  <nav id="nav"></nav>
+
+  <div class="page-head">
+    <h1>Live monitor</h1>
+    <div class="sub">Continuous monitoring from the wearable sensor node</div>
+  </div>
+
+  <div class="pills">
+    <label class="sel"><span>Patient</span><select id="devSel" aria-label="Select patient"></select></label>
+    <button class="ghost" id="add">Add patient</button>
+    <div class="pill" title="Connection from this browser to the live data feed"><i class="dot" id="dSrv"></i><span id="tSrv">Live feed offline</span></div>
+    <div class="pill"><i class="dot" id="dDev"></i><span id="tDev">Device offline</span></div>
+    <div class="pill" id="clock">--:--:--</div>
+  </div>
 
   <div class="who card"><div><b id="pName">No patient added</b><span id="pChan"></span></div><button class="ghost" id="rm">Remove patient</button></div>
 
@@ -348,9 +339,9 @@ let client, urlIdx = 0, failTimer;
 function startClient(){
   if (typeof mqtt === "undefined") { $("tSrv").textContent = "Connection library not loaded"; return; }
   client = mqtt.connect(URLS[urlIdx], {clientId:"dash-"+Math.random().toString(16).slice(2,8), reconnectPeriod:2000, connectTimeout:6000});
-  client.on("connect", () => { clearTimeout(failTimer); $("dSrv").classList.add("on"); $("tSrv").textContent = "Server connected"; patients.forEach(p => client.subscribe(p.channel + "/#")); });
-  client.on("close",   () => { $("dSrv").classList.remove("on"); $("tSrv").textContent = "Server offline"; });
-  client.on("error",   e => { $("tSrv").textContent = "Server error: " + (e.message || e); });
+  client.on("connect", () => { clearTimeout(failTimer); $("dSrv").classList.add("on"); $("tSrv").textContent = "Live feed connected"; patients.forEach(p => client.subscribe(p.channel + "/#")); });
+  client.on("close",   () => { $("dSrv").classList.remove("on"); $("tSrv").textContent = "Live feed offline"; });
+  client.on("error",   e => { $("tSrv").textContent = "Live feed error: " + (e.message || e); });
   client.on("message", onMessage);
   failTimer = setTimeout(() => { if (!client.connected) { client.end(true); urlIdx = (urlIdx+1) % URLS.length; startClient(); } }, 7000);
 }
@@ -393,7 +384,7 @@ $("dl").onclick = () => {
   a.download = "vitals-log-" + new Date().toISOString().slice(0,19).replace(/[:T]/g, "-") + ".csv";
   document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 };
-$("hist").onclick = () => { location.href = "/history"; };
+
 $("add").onclick = () => { $("pf").reset(); $("fErr").textContent = ""; $("dlg").showModal(); $("fName").focus(); };
 $("fCancel").onclick = () => $("dlg").close();
 $("pf").onsubmit = e => {
@@ -435,6 +426,15 @@ setInterval(saveLog, 10000);
 addEventListener("pagehide", saveLog);
 setInterval(paint, 200);
 
+// First visit when served by the server: add the board automatically (only once, so
+// removing it later sticks). Skipped when the page is opened as a plain file.
+if (!patients.length && location.protocol.startsWith("http") && !store.get("vitals.autoadded")) {
+  fetch("/api/config").then(r => r.json()).then(c => {
+    if (!patients.length && c.root) { addPatient("ESP32 Board", c.root); store.set("vitals.autoadded", "1"); }
+  }).catch(() => {});
+}
+
+if (window.SiteNav) SiteNav.render("live");
 startClient();
 </script>
 </body>
