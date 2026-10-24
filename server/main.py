@@ -4,7 +4,7 @@ import sqlite3
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import alerts, clinic, config, db
@@ -26,7 +26,33 @@ async def lifespan(app):
 
 
 app = FastAPI(title="MDM G3 Health API", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def cache_assets(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/static/app/assets/"):
+        response.headers["cache-control"] = "public, max-age=31536000, immutable"
+    return response
+
+
+SPA_DIR = config.ROOT_DIR / "frontend" / "dist"
+SPA_PREFIXES = {"clinic", "care", "history", "live"}
+SPA_FALLBACK = """<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Remote Care</title><link rel="icon" href="data:,"></head>
+<body><div id="app"></div></body></html>"""
+
+if SPA_DIR.exists():
+    app.mount("/static/app", StaticFiles(directory=SPA_DIR), name="app")
 app.mount("/static", StaticFiles(directory=config.ROOT_DIR / "server" / "static"), name="static")
+
+
+def spa_shell():
+    index = SPA_DIR / "index.html"
+    if index.exists():
+        return FileResponse(index, headers={"cache-control": "no-cache"})
+    return HTMLResponse(SPA_FALLBACK)
 
 
 @app.exception_handler(clinic.ClinicError)
@@ -42,31 +68,6 @@ async def sqlite_error_handler(request: Request, exc: sqlite3.Error):
 @app.get("/", include_in_schema=False)
 def dashboard():
     return RedirectResponse("/clinic", status_code=307)
-
-
-@app.get("/clinic", include_in_schema=False)
-def clinic_page():
-    return FileResponse(config.ROOT_DIR / "server" / "static" / "clinic.html")
-
-
-@app.get("/clinic/patient/{patient_id}", include_in_schema=False)
-def patient_page(patient_id: str):
-    return FileResponse(config.ROOT_DIR / "server" / "static" / "patient.html")
-
-
-@app.get("/care", include_in_schema=False)
-def care_page():
-    return FileResponse(config.ROOT_DIR / "server" / "static" / "care.html")
-
-
-@app.get("/live", include_in_schema=False)
-def live_page():
-    return FileResponse(config.ROOT_DIR / "health_dashboard.html")
-
-
-@app.get("/history", include_in_schema=False)
-def history():
-    return FileResponse(config.ROOT_DIR / "server" / "static" / "history.html")
 
 
 def actor(x_demo_actor: str | None = Header(default=None)) -> str:
@@ -345,3 +346,10 @@ def export_csv():
             "Content-Disposition": "attachment; filename=health-history.csv"
         },
     )
+
+
+@app.get("/{full_path:path}", include_in_schema=False)
+def spa(full_path: str):
+    if full_path.split("/", 1)[0] not in SPA_PREFIXES:
+        raise HTTPException(status_code=404)
+    return spa_shell()

@@ -98,7 +98,7 @@ In the dashboard, add a patient with channel `mdm-g3-pcce/health/sim01` (or `sim
 
 ```text
 .
-|-- health_node.ino              ESP32 firmware
+|-- health_node/health_node.ino              ESP32 firmware
 |-- health_dashboard.html        live dashboard (single file)
 |-- simulator.py                 virtual ESP32 / scenario generator
 |-- server/

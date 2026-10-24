@@ -41,3 +41,19 @@ class ApiTest(DatabaseTestCase):
             )
             self.assertIn("patients", client.get("/api/clinic/worklist").json())
 
+    def test_spa_routes_and_api_isolation(self):
+        with TestClient(main.app) as client:
+            for path in [
+                "/clinic",
+                "/clinic/patient/PT-0001",
+                "/care",
+                "/history",
+                "/live",
+            ]:
+                response = client.get(path)
+                self.assertEqual(response.status_code, 200, path)
+                self.assertIn('id="app"', response.text, path)
+            self.assertEqual(client.get("/api/does-not-exist").status_code, 404)
+            self.assertEqual(client.get("/does-not-exist").status_code, 404)
+            self.assertNotIn("<html", client.get("/api/health").text.lower())
+

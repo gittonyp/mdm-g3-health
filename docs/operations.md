@@ -184,7 +184,7 @@ The public broker is shared and unauthenticated. Use fake data only.
 To use a different broker:
 
 - set `MQTT_HOST`, `MQTT_PORT`, and `MQTT_ROOT` for the server,
-- edit the same values in `health_node.ino` for the board,
+- edit the same values in `health_node/health_node.ino` for the board,
 - append `?broker=wss://your-broker/mqtt` to the dashboard URL.
 
 The dashboard broker override affects only the browser page, not the server.

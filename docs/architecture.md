@@ -6,7 +6,7 @@ This document describes the runtime system as implemented in the repository. It 
 
 | Component | File(s) | Responsibility |
 |---|---|---|
-| ESP32 firmware | `health_node.ino` | Reads sensors, detects activity/fall, publishes MQTT, drives buzzer/LEDs/OLED, accepts `recalibrate` |
+| ESP32 firmware | `health_node/health_node.ino` | Reads sensors, detects activity/fall, publishes MQTT, drives buzzer/LEDs/OLED, accepts `recalibrate` |
 | Simulator | `simulator.py` | Publishes the same MQTT contract for virtual patients and scripted scenarios |
 | Broker | HiveMQ public broker | Routes topics between devices, server, and browser |
 | MQTT ingestor | `server/mqtt_ingest.py` | Subscribes to the topic root, persists messages, runs rule and model scoring, publishes anomalies |

@@ -7,3 +7,5 @@ data/*
 .git
 .playwright-mcp
 *.ino
+frontend/node_modules
+frontend/dist

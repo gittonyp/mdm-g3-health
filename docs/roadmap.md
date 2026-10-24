@@ -30,7 +30,7 @@ Snapshot: 2026-10-22. This page separates what is working, what is partial, and 
 
 ### 1. Firmware temperature (high) - implemented, awaiting hardware validation
 
-`health_node.ino` now reads the LM35 and publishes `temp` (see `hardware.md`). It is compile-tested; the acceptance criteria below still need a run on the real board.
+`health_node/health_node.ino` now reads the LM35 and publishes `temp` (see `hardware.md`). It is compile-tested; the acceptance criteria below still need a run on the real board.
 
 Original scope:
 
@@ -138,4 +138,4 @@ These were descoped by project decision and should not be added without a new ag
 
 ## WiFi credentials decision
 
-The firmware keeps WiFi credentials directly in `health_node.ino`, as requested. This is documented as a demo-only pattern. Do not reuse it for production or for a repository that should not expose those values.
+The firmware keeps WiFi credentials directly in `health_node/health_node.ino`, as requested. This is documented as a demo-only pattern. Do not reuse it for production or for a repository that should not expose those values.

@@ -153,7 +153,7 @@ Parts, wiring, and the full pin table are in [`docs/hardware.md`](docs/hardware.
 Flash steps (the sketch is already fully configured, including WiFi and the LM35):
 
 1. In the Arduino IDE, install the **ESP32** board package and the libraries `PubSubClient`, `Adafruit SSD1306`, `Adafruit GFX Library`, and `SparkFun MAX3010x Pulse and Proximity Sensor Library`.
-2. Open `health_node.ino`, choose the board **ESP32 Dev Module** and your serial port, and press **Upload**.
+2. Open `health_node/health_node.ino`, choose the board **ESP32 Dev Module** and your serial port, and press **Upload**.
 3. Open the serial monitor at 115200 baud. A status line prints every 5 seconds.
 
 The sketch was compile-tested for ESP32 core 3.3.12 with these libraries. If your WiFi isn't `pratik098`, edit `WIFI_SSID` / `WIFI_PASS` (2.4 GHz only).
@@ -169,7 +169,7 @@ First-run checklist after flashing:
 
 **Temperature (LM35).** The firmware sends `"temp"` only when a finger has been on the sensor for 30 s and the reading is plausible; otherwise it sends `null`, which the server treats as "no data". Expect `T --.-` on the OLED for the first 30 s after you place a finger.
 
-The LM35 measures *fingertip skin* temperature, which is usually 2–4 °C below body temperature. The firmware therefore adds `TEMP_OFFSET_C` (default `3.0`) and publishes an **estimated body temperature**. If you compare against a thermometer and it's off, change that one number at the top of `health_node.ino`. The server also ignores values outside 25–45 °C, so a loose wire can't cause false alerts.
+The LM35 measures *fingertip skin* temperature, which is usually 2–4 °C below body temperature. The firmware therefore adds `TEMP_OFFSET_C` (default `3.0`) and publishes an **estimated body temperature**. If you compare against a thermometer and it's off, change that one number at the top of `health_node/health_node.ino`. The server also ignores values outside 25–45 °C, so a loose wire can't cause false alerts.
 
 ## 8. Configuration
 
@@ -185,7 +185,7 @@ All server settings are environment variables (see `server/config.py`).
 | `MODEL_CALIBRATION_SECONDS` | `0` | `0` uses the artifact default (120 s) |
 | `PORT` | `10000` (Docker) | HTTP port in the container |
 
-The simulator reads `MQTT_HOST`, `MQTT_PORT`, and `MQTT_ROOT` too. To use a private broker, set the same values for the server and simulator, and edit them in `health_node.ino`.
+The simulator reads `MQTT_HOST`, `MQTT_PORT`, and `MQTT_ROOT` too. To use a private broker, set the same values for the server and simulator, and edit them in `health_node/health_node.ino`.
 
 ## 9. Retraining the ML model
 
@@ -230,7 +230,7 @@ See [`docs/roadmap.md`](docs/roadmap.md) for scope and acceptance criteria.
 ## Repository layout
 
 ```text
-health_node.ino          ESP32 firmware
+health_node/health_node.ino          ESP32 firmware
 health_dashboard.html    live dashboard (served at /live)
 simulator.py             virtual ESP32
 server/                  FastAPI app, MQTT ingest, DB, ML model, alerts, clinic logic, static pages
@@ -243,4 +243,4 @@ Dockerfile, render.yaml  deployment
 
 ## Security note
 
-`health_node.ino` contains WiFi credentials in plain text, and the repo is on public GitHub. Before sharing it further, change the WiFi password and move the credentials to an untracked header file.
+`health_node/health_node.ino` contains WiFi credentials in plain text, and the repo is on public GitHub. Before sharing it further, change the WiFi password and move the credentials to an untracked header file.

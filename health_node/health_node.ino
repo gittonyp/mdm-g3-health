@@ -48,6 +48,18 @@
 #define MOTION_MS   100     // 10 Hz
 #define VITALS_MS   500     // 2 Hz
 
+// ---------- adaptive alerting (personal resting baseline) ----------
+#define HR_MED_N            5       // median filter length for HR (1 Hz samples)
+#define BASELINE_ALPHA      0.05f   // baseline learning rate (~20 s time constant)
+#define BASELINE_WARMUP_S   30      // quiet resting seconds before alerts are enabled
+#define BASELINE_K          3.0f    // deviation threshold in standard deviations
+#define HR_TOL_MIN          15.0f   // never alert on less than this HR deviation
+#define SPO2_TOL_MIN        3.0f    // never alert on less than this SpO2 drop
+#define ABS_HR_HI           200     // emergency backstops, independent of baseline
+#define ABS_HR_LO           35
+#define ABS_SPO2_LO         85
+#define ACTIVITY_GRACE_MS   8000    // ignore deviations right after an activity change
+
 // ---------- temperature (LM35, 10 mV per degC) ----------
 #define PIN_TEMP            33       // ADC1 channel 5 (ADC2 pins do not work with WiFi)
 #define TEMP_OFFSET_C       3.0f     // fingertip skin reads ~2-4 degC below body temperature;
@@ -118,12 +130,22 @@ float magBuf[WIN]; int magIdx = 0, magCnt = 0;
 int actState = 0, candAct = 0, candCount = 0;   // 0 rest, 1 walk, 2 run
 const char* ACT_NAME[] = {"rest", "walk", "run"};
 uint32_t freefallAt = 0, fallUntil = 0;
+uint32_t activityChangedAt = 0;
 bool fallEventPending = false;
 
 // status
-int  alertLevel = 0;                // hysteresis counter 0..4
+uint8_t badHist = 0;                // last 8 s of "bad" flags, 1 = bad
 bool alertOn = false;
+bool hrvLow = false;                // rest-only secondary flag, never raises the alarm
 bool recalRequested = false;
+int alertTier = 0;                  // 0 normal, 1 watch, 2 alert, 3 emergency
+
+// personal resting baseline
+float baseHr = NAN, baseSpo2 = NAN, baseHrv = NAN;
+float baseVarHr = 0, baseVarSpo2 = 0;
+uint32_t baseSamples = 0;
+bool baselineReady = false;
+float hrFiltBuf[HR_MED_N]; int hrFiltIdx = 0, hrFiltCnt = 0;
 
 // timers
 uint32_t tMpu = 0, tAct = 0, tStat = 0, tPubM = 0, tPubV = 0, tOled = 0;
@@ -177,6 +199,7 @@ void calibrateGyro() {
   }
   if (n) { gOffX = sx / n; gOffY = sy / n; gOffZ = sz / n; }
   magCnt = 0; magIdx = 0; actState = candAct = 0; candCount = 0;
+  activityChangedAt = millis();
   fallUntil = 0;
 }
 
@@ -206,7 +229,7 @@ void evalActivity() {
   float sd = sqrtf(v / WIN);
   int cand = (sd < 0.08f) ? 0 : (sd < 0.45f) ? 1 : 2;
   if (cand == candAct) candCount++; else { candAct = cand; candCount = 1; }
-  if (candCount >= 3) actState = candAct;
+  if (candCount >= 3 && actState != candAct) { actState = candAct; activityChangedAt = millis(); }
 }
 
 const char* activityName() { return (millis() < fallUntil) ? "fall" : ACT_NAME[actState]; }
@@ -224,9 +247,11 @@ void tempSample() {
 #if SIM_MODE
   float c = 33.5f + (random(-20, 21) / 100.0f);
 #else
-  uint32_t mv = 0;
-  for (int i = 0; i < 16; i++) mv += analogReadMilliVolts(PIN_TEMP);
-  float c = (mv / 16.0f) / 10.0f;               // LM35: 10 mV per degC
+  static float simSkinC = 36.8f - TEMP_OFFSET_C;
+  float target = finger ? (36.8f - TEMP_OFFSET_C) : 24.5f;
+  simSkinC += (target - simSkinC) * 0.05f;
+  simSkinC += random(-8, 9) / 100.0f;
+  float c = simSkinC;
 #endif
   tempSkinC = isnan(tempSkinC) ? c : tempSkinC + (c - tempSkinC) * 0.1f;
 }
@@ -336,19 +361,91 @@ void pollMax() {
 }
 #endif
 
-// every 1 s: alert if vitals out of range (needs ~4 s of agreement to flip = stable)
+float medianOf(float* a, int n) {
+  if (n <= 0) return NAN;
+  float t[HR_MED_N];
+  int m = n < HR_MED_N ? n : HR_MED_N;
+  for (int i = 0; i < m; i++) t[i] = a[i];
+  for (int i = 1; i < m; i++) { float k = t[i]; int j = i - 1; while (j >= 0 && t[j] > k) { t[j + 1] = t[j]; j--; } t[j + 1] = k; }
+  return t[m / 2];
+}
+
+void ewmaUpdate(float &mean, float &var, float x) {
+  float d = x - mean;
+  mean += BASELINE_ALPHA * d;
+  var = (1.0f - BASELINE_ALPHA) * (var + BASELINE_ALPHA * d * d);
+}
+
+void resetBaseline() {
+  baseHr = baseSpo2 = baseHrv = NAN;
+  baseVarHr = baseVarSpo2 = 0;
+  baseSamples = 0; baselineReady = false;
+  hrFiltIdx = hrFiltCnt = 0;
+  badHist = 0; alertOn = false; alertTier = 0; hrvLow = false;
+}
+
+// every 1 s: learn the personal resting baseline, then alert on deviation (motion-gated)
 void evalStatus() {
-  bool bad = vitalsValid && (spo2 < 92 || hr > 120 || hr < 50);
-  if (bad) { if (alertLevel < 4) alertLevel++; } else { if (alertLevel > 0) alertLevel--; }
-  if (alertLevel >= 4) alertOn = true;
-  if (alertLevel == 0) alertOn = false;
+  uint32_t now = millis();
+  bool grace = (now - activityChangedAt) < ACTIVITY_GRACE_MS;
+  bool resting = vitalsValid && actState == 0 && !grace;
+
+  if (vitalsValid) {
+    hrFiltBuf[hrFiltIdx] = hr;
+    hrFiltIdx = (hrFiltIdx + 1) % HR_MED_N;
+    if (hrFiltCnt < HR_MED_N) hrFiltCnt++;
+  }
+  float hrEval = medianOf(hrFiltBuf, hrFiltCnt);
+
+  // learn only from quiet rest; the EWMA moves slowly enough to ignore short spikes
+  if (resting && isfinite(hrEval)) {
+    if (!isfinite(baseHr)) {
+      baseHr = hrEval; baseSpo2 = spo2; baseHrv = hrv;
+      baseVarHr = baseVarSpo2 = 0;
+    } else {
+      ewmaUpdate(baseHr, baseVarHr, hrEval);
+      ewmaUpdate(baseSpo2, baseVarSpo2, spo2);
+      baseHrv += (hrv - baseHrv) * BASELINE_ALPHA;
+    }
+    if (baseSamples < 1000000) baseSamples++;
+    if (baseSamples >= BASELINE_WARMUP_S) baselineReady = true;
+  }
+
+  bool hrBad = false, spo2Bad = false;
+  if (resting && baselineReady) {
+    float hrTol = fmaxf(HR_TOL_MIN, BASELINE_K * sqrtf(baseVarHr));
+    float spTol = fmaxf(SPO2_TOL_MIN, BASELINE_K * sqrtf(baseVarSpo2));
+    hrBad = fabsf(hrEval - baseHr) > hrTol;
+    spo2Bad = (baseSpo2 - spo2) > spTol;
+  }
+
+  bool urgent = isfinite(hrEval) && (hrEval > ABS_HR_HI || hrEval < ABS_HR_LO);
+  if (resting && vitalsValid && spo2 < ABS_SPO2_LO) urgent = true;
+
+  hrvLow = resting && baselineReady && baseHrv > 1.0f && hrv < baseHrv * 0.5f;
+
+  bool bad = hrBad || spo2Bad || urgent;
+  badHist = (uint8_t)((badHist << 1) | (bad ? 1 : 0));
+  int cnt = 0;
+  for (uint8_t b = badHist; b; b >>= 1) cnt += b & 1;
+
+  if (urgent)        alertTier = 3;
+  else if (cnt >= 6) alertTier = 2;
+  else if (cnt >= 2) alertTier = alertOn ? 2 : 1;
+  else if (cnt == 0) alertTier = 0;
+  alertOn = alertTier >= 2;
 }
 
 const char* stateName() {
   if (millis() < fallUntil) return "fall";
   if (!finger) return "no_finger";
   if (!vitalsValid) return "measuring";
-  return alertOn ? "alert" : "normal";
+  if (alertTier >= 3) return "emergency";
+  if (!baselineReady) return actState == 0 ? "learning" : "normal";
+  if (alertTier == 2) return "alert";
+  if (alertTier == 1) return "watch";
+  if (hrvLow) return "stress";
+  return "normal";
 }
 
 // ======================= outputs =======================
@@ -499,7 +596,7 @@ void loop() {
 
   // temperature: sample at 5 Hz, remember when the finger was placed
   if (now - tTemp >= 200) { tTemp = now; tempSample(); }
-  if (finger && !fingerPrev) fingerOnAt = now;
+  if (finger && !fingerPrev) { fingerOnAt = now; hrFiltIdx = hrFiltCnt = 0; }
   fingerPrev = finger;
 
   // recalibrate button (or MQTT cmd)
@@ -514,7 +611,7 @@ void loop() {
     recalRequested = false;
     oled.clearDisplay(); oled.setCursor(0, 20); oled.setTextSize(1);
     oled.println("Recalibrating..."); oled.display();
-    calibrateGyro(); resetVitals(); alertLevel = 0; alertOn = false;
+    calibrateGyro(); resetVitals(); resetBaseline();
     buzz(true); delay(80); buzz(false);
   }
 

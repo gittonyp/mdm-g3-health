@@ -1,6 +1,6 @@
 # Hardware and Firmware
 
-This document describes the ESP32 node, its wiring, the firmware configuration, and the planned LM35 temperature addition. The firmware file is `health_node.ino`.
+This document describes the ESP32 node, its wiring, the firmware configuration, and the planned LM35 temperature addition. The firmware file is `health_node/health_node.ino`.
 
 Current state: the firmware reads heart rate, SpO2, HRV, motion, and LM35 temperature; it detects falls and raises local alerts. It does **not** run a model. The sketch is compile-tested but has not yet been run on the board.
 
@@ -45,7 +45,7 @@ Other connections:
 | SpO2 potentiometer | `D35` | Only used when `SIM_MODE 1` |
 | HRV potentiometer | `D32` | Only used when `SIM_MODE 1` |
 
-### LM35 (implemented in `health_node.ino`)
+### LM35 (implemented in `health_node/health_node.ino`)
 
 - Supply the LM35 from 5 V (`VIN`) and ground. Its output stays well under 1 V, so it is safe for the ESP32 ADC, and the LM35 is only specified from 4 V.
 - Connect `Vout` to `D33` (GPIO33, ADC1 channel 5).
@@ -66,7 +66,7 @@ The dashboard stops simulating temperature when `temp` arrives, and the server s
 
 ## Firmware configuration
 
-Configuration is at the top of `health_node.ino`:
+Configuration is at the top of `health_node/health_node.ino`:
 
 | Setting | Default | Meaning |
 |---|---|---|
