@@ -119,6 +119,24 @@ export function applyTopic(device, topicKey, text, now) {
   return "";
 }
 
+export function restoreDevices(devices, log) {
+  for (const row of log || []) {
+    const device = devices[row[2]];
+    if (!device) continue;
+    const [, , , hr, spo2, hrv, temp, act] = row;
+    if (hr != null) setVal(device, "hr", hr);
+    if (spo2 != null) setVal(device, "spo2", spo2);
+    if (hrv != null) setVal(device, "hrv", hrv);
+    const temperature = temp == null ? null : Number(temp);
+    if (temp != null) {
+      device.last.temp = Number.isFinite(temperature) ? temperature : null;
+      if (Number.isFinite(temperature)) pushBuf(device.buf.temp, temperature, LIM);
+    }
+    if (act) device.motion.act = act;
+    if ([hr, spo2, hrv, temp].some((value) => value != null)) device.lastAt = row[0];
+  }
+}
+
 export function isAlive(device, now) {
   return now - Math.max(device.lastVitals, device.lastMotion) < 4000;
 }

@@ -9,6 +9,7 @@ import {
   isAlive,
   loadLog,
   loadPatients,
+  restoreDevices,
   saveLog,
   savePatients,
   selectedChannel,
@@ -34,6 +35,7 @@ export function useLiveFeed() {
   patients.value.forEach((patient) => {
     devices[patient.channel] = createDevice(patient);
   });
+  restoreDevices(devices, log.value);
   if (!selected.value || !devices[selected.value]) {
     selected.value = patients.value[0] ? patients.value[0].channel : null;
   }
